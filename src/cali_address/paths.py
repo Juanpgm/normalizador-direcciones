@@ -21,6 +21,11 @@ __all__ = [
     "SERVING_FILES",
     "SHARED_INPUTS",
     "resolve_artifacts_dir",
+    "REQUIRED_ARTIFACTS",
+    "OPTIONAL_ARTIFACTS",
+    "ArtifactsMissingError",
+    "check_artifacts",
+    "require_artifacts",
     "shared_path",
     "MODEL_FILES",
     "EXPERIMENT_FILENAME",
@@ -125,3 +130,44 @@ def code_fingerprint(src_dir: str | None = None) -> str:
         with open(os.path.join(src, name), "rb") as fh:
             h.update(fh.read().replace(b"\r\n", b"\n"))
     return h.hexdigest()
+
+
+#: Files ``AddressNormalizer`` cannot start without.
+REQUIRED_ARTIFACTS = ("model.pt", "catastro_emb.pt", "catastro_docs.parquet")
+
+#: Files the loader tolerates missing: ``tuning.json`` falls back to the module defaults,
+#: ``reliability.json`` leaves the confidence columns empty, ``gazetteer.pkl`` is a cache rebuilt
+#: from ``basemaps/``.
+OPTIONAL_ARTIFACTS = ("tuning.json", "reliability.json", "gazetteer.pkl")
+
+
+class ArtifactsMissingError(FileNotFoundError):
+    """Required model artifacts are absent; the message lists them and says how to get them."""
+
+
+def check_artifacts(artifacts_dir: str | None = None) -> tuple[list[str], list[str]]:
+    """Return ``(missing_required, missing_optional)`` as the paths the loader would read.
+
+    Resolution mirrors :class:`cali_address.inference.AddressNormalizer` (``model_path`` /
+    ``shared_path``), so an experiment directory that inherits the model is judged the same way.
+    """
+    base = artifacts_dir or DEFAULT_ARTIFACTS_DIR
+    resolvers = {"model.pt": model_path, "catastro_emb.pt": model_path, "catastro_docs.parquet": shared_path}
+    required = [resolvers[name](name, base) for name in REQUIRED_ARTIFACTS]
+    missing = [p for p in required if not os.path.isfile(p)]
+    optional = [p for p in (os.path.join(base, name) for name in OPTIONAL_ARTIFACTS) if not os.path.isfile(p)]
+    return missing, optional
+
+
+def require_artifacts(artifacts_dir: str | None = None) -> None:
+    """Raise :class:`ArtifactsMissingError` (with an actionable message) unless the required files exist."""
+    missing, _ = check_artifacts(artifacts_dir)
+    if not missing:
+        return
+    base = os.path.abspath(artifacts_dir or DEFAULT_ARTIFACTS_DIR)
+    listing = "\n".join(f"  - {p}" for p in missing)
+    raise ArtifactsMissingError(
+        f"model artifacts not found in {base}. Missing required files:\n{listing}\n"
+        "Regenerate them by following docs/model-artifacts.md (catastro_emb.pt is not in git), "
+        f"or point --artifacts-dir / {ENV_ARTIFACTS_DIR} at a directory that has them."
+    )

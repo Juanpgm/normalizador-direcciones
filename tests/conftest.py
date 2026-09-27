@@ -20,6 +20,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from cali_address.inference import _structural_agreement  # noqa: E402
 from cali_address.parser import parse_address  # noqa: E402
+from cali_address.paths import DEFAULT_ARTIFACTS_DIR, check_artifacts  # noqa: E402
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip ``@pytest.mark.requires_artifacts`` tests when the real serving artifacts are absent.
+
+    A fresh clone (or CI) has no ``catastro_emb.pt``: it is above GitHub's file-size limit and is
+    regenerated locally (docs/model-artifacts.md).
+    """
+    missing, _ = check_artifacts(DEFAULT_ARTIFACTS_DIR)
+    if not missing:
+        return
+    skip = pytest.mark.skip(reason="serving artifacts are not present: " + ", ".join(os.path.basename(p) for p in missing))
+    for item in items:
+        if "requires_artifacts" in item.keywords:
+            item.add_marker(skip)
 
 
 class StubNormalizer:

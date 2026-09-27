@@ -29,10 +29,8 @@ ARTIFACTS = os.path.join(ROOT, "artifacts")
 BASEMAPS = os.path.join(ROOT, "basemaps")
 ESRI = "/arcgis/rest/services/CaliNormalizador/GeocodeServer"
 
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(ARTIFACTS, "model.pt")),
-    reason="serving artifacts are not present",
-)
+# Skipped (see tests/conftest.py) unless model.pt, catastro_emb.pt and catastro_docs.parquet exist.
+pytestmark = pytest.mark.requires_artifacts
 
 #: Addresses with known outcomes, used across several tests.
 MATCHING = "Carrera1#9-80"
