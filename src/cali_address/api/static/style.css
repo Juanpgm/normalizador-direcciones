@@ -1,0 +1,131 @@
+:root {
+  --fondo: #f6f7f9;
+  --panel: #ffffff;
+  --borde: #d6dae0;
+  --texto: #1d2329;
+  --suave: #5d6874;
+  --acento: #1f5f8b;
+  --ok: #1d7a4b;
+  --alerta: #8a5a00;
+  --error: #9b2c2c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--texto);
+  background: var(--fondo);
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 18px 28px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--borde);
+}
+
+header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+nav a { color: var(--acento); margin-right: 14px; text-decoration: none; }
+nav a:hover { text-decoration: underline; }
+
+main { max-width: 1100px; margin: 0 auto; padding: 24px 28px 64px; }
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  padding: 20px 22px;
+  margin-bottom: 20px;
+}
+
+h2 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
+h3 { margin: 22px 0 8px; font-size: 14px; font-weight: 600; color: var(--suave); }
+
+#drop {
+  border: 2px dashed var(--borde);
+  border-radius: 6px;
+  padding: 28px;
+  text-align: center;
+  cursor: pointer;
+  background: #fbfcfd;
+}
+#drop.activo { border-color: var(--acento); background: #eef5fa; }
+#drop p { margin: 4px 0; }
+
+.hint { color: var(--suave); font-size: 13px; }
+
+.fila { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; }
+
+label { font-weight: 600; font-size: 13px; }
+
+select, button {
+  font: inherit;
+  padding: 7px 12px;
+  border: 1px solid var(--borde);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--texto);
+}
+select { max-width: 340px; }
+button { cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--acento); color: var(--acento); }
+button:disabled { opacity: .55; cursor: progress; }
+#normalizar { background: var(--acento); border-color: var(--acento); color: #fff; font-weight: 600; }
+#normalizar:hover:not(:disabled) { background: #17496b; color: #fff; }
+
+.banner {
+  padding: 10px 14px;
+  border-radius: 4px;
+  margin: 12px 0;
+  border-left: 4px solid var(--acento);
+  background: #eef5fa;
+  font-size: 14px;
+}
+.banner.warn { border-color: var(--alerta); background: #fdf6e6; color: var(--alerta); }
+.banner.error { border-color: var(--error); background: #fdeeee; color: var(--error); }
+
+.badges { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+.badge {
+  padding: 6px 12px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  background: #eceff2;
+  color: var(--suave);
+}
+.badge.ok { background: #e3f3ea; color: var(--ok); }
+.badge.sin_match { background: #fdf6e6; color: var(--alerta); }
+.badge.no_parseable { background: #fdeeee; color: var(--error); }
+
+.tabla-scroll { overflow: auto; max-height: 460px; border: 1px solid var(--borde); border-radius: 4px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td {
+  border-bottom: 1px solid var(--borde);
+  padding: 6px 10px;
+  text-align: left;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+th { position: sticky; top: 0; background: #eceff2; font-weight: 600; z-index: 1; }
+tbody tr:nth-child(even) { background: #fafbfc; }
+
+/* Documentation page */
+body.doc main.prose { max-width: 860px; background: var(--panel); border: 1px solid var(--borde); border-radius: 6px; padding: 28px 34px; margin-top: 24px; }
+.prose h1 { font-size: 24px; }
+.prose h2 { font-size: 19px; margin-top: 30px; border-bottom: 1px solid var(--borde); padding-bottom: 6px; }
+.prose h3 { font-size: 16px; color: var(--texto); margin-top: 24px; }
+.prose code { background: #eceff2; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+.prose pre { background: #1d2329; color: #e6edf3; padding: 14px 16px; border-radius: 5px; overflow: auto; }
+.prose pre code { background: none; color: inherit; padding: 0; font-size: 12.5px; }
+.prose table { margin: 14px 0; }
+.prose td, .prose th { white-space: normal; }
+.prose a { color: var(--acento); }
+.prose hr { border: none; border-top: 1px solid var(--borde); margin: 26px 0; }

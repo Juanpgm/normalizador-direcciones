@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Normalizador de direcciones de Cali</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Normalizador de direcciones de Cali</h1>
+  <nav><a href="/docs-integracion">Documentacion de integracion</a> <a href="/docs">Swagger</a></nav>
+</header>
+
+<main>
+  <section id="paso-archivo">
+    <h2>1. Cargue el archivo</h2>
+    <div id="drop" tabindex="0" role="button" aria-label="Seleccionar o arrastrar archivo">
+      <p><strong>Arrastre un archivo aqui</strong> o haga clic para seleccionarlo.</p>
+      <p class="hint">Formatos aceptados: .xlsx, .xls, .csv, .geojson, .json y .zip con shapefile (.shp + .shx + .dbf, .prj opcional).</p>
+      <input type="file" id="file" accept=".xlsx,.xls,.csv,.geojson,.json,.zip" hidden>
+    </div>
+    <p id="archivo-nombre" class="hint"></p>
+  </section>
+
+  <section id="paso-columna" hidden>
+    <h2>2. Confirme la columna de direccion</h2>
+    <div id="aviso-columna" class="banner warn" hidden>
+      No se pudo detectar la columna de direccion. Seleccionela en la lista.
+    </div>
+    <div id="avisos" class="banner info" hidden></div>
+    <div class="fila">
+      <label for="columna">Columna de direccion</label>
+      <select id="columna"></select>
+      <button id="normalizar" type="button">Normalizar</button>
+    </div>
+    <p id="meta" class="hint"></p>
+    <h3>Muestra del archivo</h3>
+    <div class="tabla-scroll"><table id="preview"></table></div>
+  </section>
+
+  <section id="paso-resultado" hidden>
+    <h2>3. Resultado</h2>
+    <div id="resumen" class="badges"></div>
+    <div class="fila">
+      <span>Descargar:</span>
+      <button type="button" data-formato="xlsx">Excel (.xlsx)</button>
+      <button type="button" data-formato="csv">CSV</button>
+      <button type="button" data-formato="geojson">GeoJSON</button>
+    </div>
+    <p id="nota-truncado" class="hint"></p>
+    <div class="tabla-scroll"><table id="resultados"></table></div>
+  </section>
+
+  <div id="estado" class="banner" hidden></div>
+</main>
+
+<script>
+"use strict";
+const MAX_FILAS_VISIBLES = 200;
+const el = (id) => document.getElementById(id);
+let archivo = null;
+
+function aviso(texto, clase) {
+  const caja = el("estado");
+  caja.textContent = texto || "";
+  caja.className = "banner " + (clase || "info");
+  caja.hidden = !texto;
+}
+
+function tabla(destino, columnas, filas) {
+  const thead = "<thead><tr>" + columnas.map((c) => `<th>${escapar(c)}</th>`).join("") + "</tr></thead>";
+  const tbody = "<tbody>" + filas.map((fila) =>
+    "<tr>" + columnas.map((c) => `<td>${escapar(fila[c])}</td>`).join("") + "</tr>"
+  ).join("") + "</tbody>";
+  destino.innerHTML = thead + tbody;
+}
+
+function escapar(valor) {
+  if (valor === null || valor === undefined) return "";
+  return String(valor).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+}
+
+function parametros(formato) {
+  const datos = new FormData();
+  datos.append("file", archivo);
+  datos.append("address_column", el("columna").value);
+  datos.append("output_format", formato);
+  return datos;
+}
+
+async function inspeccionar(f) {
+  archivo = f;
+  el("archivo-nombre").textContent = `Archivo seleccionado: ${f.name} (${(f.size / 1048576).toFixed(2)} MB)`;
+  el("paso-columna").hidden = true;
+  el("paso-resultado").hidden = true;
+  aviso("Leyendo el archivo...", "info");
+  const datos = new FormData();
+  datos.append("file", f);
+  let respuesta;
+  try {
+    respuesta = await fetch("/api/v1/inspect", { method: "POST", body: datos });
+  } catch (error) {
+    aviso("No se pudo contactar el servicio.", "error");
+    return;
+  }
+  const cuerpo = await respuesta.json().catch(() => ({}));
+  if (!respuesta.ok) {
+    aviso(cuerpo.message || cuerpo.detail || "No se pudo leer el archivo.", "error");
+    return;
+  }
+  aviso("");
+  const select = el("columna");
+  select.innerHTML = '<option value="">— elija una columna —</option>' +
+    cuerpo.candidates.map((c) => `<option value="${escapar(c.column)}">${escapar(c.column)} (${c.score.toFixed(0)})</option>`).join("");
+  select.value = cuerpo.suggested_column || "";
+  el("aviso-columna").hidden = Boolean(cuerpo.suggested_column);
+  el("avisos").hidden = !(cuerpo.warnings && cuerpo.warnings.length);
+  el("avisos").textContent = (cuerpo.warnings || []).join(" · ");
+  el("meta").textContent = `Formato ${cuerpo.format} · ${cuerpo.row_count} filas · ${cuerpo.columns.length} columnas` +
+    (cuerpo.header_row !== null && cuerpo.header_row !== undefined ? ` · encabezado en la fila ${cuerpo.header_row}` : "");
+  tabla(el("preview"), cuerpo.columns, cuerpo.preview || []);
+  el("paso-columna").hidden = false;
+}
+
+async function normalizar() {
+  if (!archivo) return;
+  if (!el("columna").value) { aviso("Elija la columna de direccion.", "warn"); return; }
+  aviso("Normalizando, esto puede tardar segun el tamano del archivo...", "info");
+  el("normalizar").disabled = true;
+  let respuesta;
+  try {
+    respuesta = await fetch("/api/v1/normalize", { method: "POST", body: parametros("json") });
+  } catch (error) {
+    aviso("No se pudo contactar el servicio.", "error");
+    el("normalizar").disabled = false;
+    return;
+  }
+  el("normalizar").disabled = false;
+  const cuerpo = await respuesta.json().catch(() => ({}));
+  if (!respuesta.ok) {
+    if (cuerpo.error === "address_column_required") {
+      aviso(cuerpo.message + " Candidatas: " + (cuerpo.candidates || []).map((c) => c.column).join(", "), "warn");
+    } else {
+      aviso(cuerpo.message || cuerpo.detail || "La normalizacion fallo.", "error");
+    }
+    return;
+  }
+  aviso("");
+  const resumen = cuerpo.summary;
+  el("resumen").innerHTML = ["OK", "SIN_MATCH", "NO_PARSEABLE", "total"]
+    .map((clave) => `<span class="badge ${clave.toLowerCase()}">${clave}: ${resumen[clave]}</span>`).join("");
+  const filas = cuerpo.results || [];
+  const visibles = filas.slice(0, MAX_FILAS_VISIBLES);
+  el("nota-truncado").textContent = filas.length > MAX_FILAS_VISIBLES
+    ? `Se muestran las primeras ${MAX_FILAS_VISIBLES} de ${filas.length} filas. Descargue el archivo para verlas todas.`
+    : "";
+  tabla(el("resultados"), filas.length ? Object.keys(filas[0]) : [], visibles);
+  el("paso-resultado").hidden = false;
+}
+
+async function descargar(formato) {
+  if (!archivo || !el("columna").value) { aviso("Elija la columna de direccion.", "warn"); return; }
+  aviso(`Generando el archivo ${formato}...`, "info");
+  const respuesta = await fetch("/api/v1/normalize", { method: "POST", body: parametros(formato) });
+  if (!respuesta.ok) {
+    const cuerpo = await respuesta.json().catch(() => ({}));
+    aviso(cuerpo.message || cuerpo.detail || "La descarga fallo.", "error");
+    return;
+  }
+  const blob = await respuesta.blob();
+  const enlace = document.createElement("a");
+  enlace.href = URL.createObjectURL(blob);
+  const base = archivo.name.replace(/\.[^.]+$/, "");
+  enlace.download = `${base}_normalizado.${formato === "xlsx" ? "xlsx" : formato}`;
+  document.body.appendChild(enlace);
+  enlace.click();
+  enlace.remove();
+  URL.revokeObjectURL(enlace.href);
+  aviso("");
+}
+
+const drop = el("drop");
+drop.addEventListener("click", () => el("file").click());
+drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") el("file").click(); });
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("activo"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("activo"));
+drop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  drop.classList.remove("activo");
+  if (e.dataTransfer.files.length) inspeccionar(e.dataTransfer.files[0]);
+});
+el("file").addEventListener("change", (e) => { if (e.target.files.length) inspeccionar(e.target.files[0]); });
+el("normalizar").addEventListener("click", normalizar);
+document.querySelectorAll("[data-formato]").forEach((boton) =>
+  boton.addEventListener("click", () => descargar(boton.dataset.formato)));
+</script>
+</body>
+</html>

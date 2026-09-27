@@ -1,0 +1,24 @@
+# Railway service configuration.
+#
+# Build: the Dockerfile at the repository root. It expects deploy/artifacts/ to
+# exist in the upload, so run `python deploy/prepare_artifacts.py` before every
+# `railway up`. No build command is set on purpose: Railway cannot regenerate the
+# artifacts, because the 415 MB source artifacts/ directory is never uploaded.
+#
+# Start: not set here either. The Dockerfile CMD already reads $PORT.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# The model loads in a background thread, so the port binds immediately and this
+# probe answers 503 with {"status":"loading"} until the 330k embeddings are in
+# memory. Allow generous time: a cold CPU start reads ~199 MB from disk.
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+# One worker. Each worker holds its own copy of the model and the 330k
+# embeddings, so a second one roughly doubles resident memory.
+numReplicas = 1
