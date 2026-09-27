@@ -1,0 +1,31 @@
+# Serving dependencies for cali_address.api, pinned to the versions this project
+# was developed and tested against.
+#
+# torch is DELIBERATELY NOT LISTED HERE. The deployed service must use the
+# CPU-only wheel, which lives on a custom index that requirements.txt cannot
+# express without also redirecting every other package. The Dockerfile installs
+# it in its own layer:
+#
+#     pip install --no-cache-dir torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+#
+# `torch==2.14.0` on that index resolves to `2.14.0+cpu`. Measured sizes, not
+# estimates: that install is ~930 MB (the image layer, per `docker history`),
+# against 3.08 GB for the CUDA build measured in this project's dev environment.
+# It is still by far the largest single item in the image, so do not add it here
+# and do not let a plain `pip install torch` pull the CUDA wheel into a build.
+# The code is device-agnostic: NORMALIZER_DEVICE defaults to "cpu".
+
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+python-multipart==0.0.26
+pydantic==2.13.2
+
+numpy==2.4.4
+pandas==2.3.3
+pyarrow==25.0.1
+openpyxl==3.1.5
+
+rapidfuzz==3.14.5
+pyshp==3.1.6
+shapely==2.1.2
+pyproj==3.7.2

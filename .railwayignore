@@ -1,0 +1,40 @@
+# Upload filter for `railway up --no-gitignore`.
+#
+# WHY --no-gitignore IS NEEDED: deploy/artifacts/ is gitignored on purpose (199 MB
+# of binaries, one file above GitHub's 100 MB limit), but the image must COPY it.
+# `railway up` honours .gitignore by default, which would strip it from the
+# upload, so the deploy command passes --no-gitignore and THIS file becomes the
+# authoritative exclusion list.
+#
+# Because .gitignore is bypassed, the private directories are listed here FIRST
+# and explicitly. Verify before deploying: the build log's upload size should be
+# ~205 MB. If it is ~255 MB or more, context/ went along and you must stop the
+# deploy.
+
+# PRIVACY: real citizen data, never upload.
+context/
+outputs/
+
+# The raw 415 MB artifacts directory; deploy/artifacts/ is what the image copies.
+artifacts/
+
+direcciones_ANN.ipynb
+.ipynb_checkpoints/
+scripts/
+tests/
+.atl/
+.pytest_cache/
+.git/
+.github/
+
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.env
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+Thumbs.db

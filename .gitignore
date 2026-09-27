@@ -1,0 +1,84 @@
+# ---------------------------------------------------------------------------
+# PRIVACY: real citizen data. These must NEVER be committed.
+#   context/  insured-property registry (Fasecolda), disaster-victim registry
+#             (RUD: names and ID numbers), field inspection reports
+#   outputs/  normalization results derived from the above
+# A commit that adds either one leaks personal data irreversibly, because git
+# history keeps it even after a later delete.
+# ---------------------------------------------------------------------------
+context/
+outputs/
+
+# ---------------------------------------------------------------------------
+# Binary artifacts: ignored by default, with an explicit whitelist.
+#   artifacts/          415 MB (training tensors, evaluation parquets, logs)
+#   deploy/artifacts/   199 MB curated serving copy (a copy, always ignored)
+# Git cannot re-include a file inside an ignored directory, so the directory
+# contents are ignored (`artifacts/*`) and only the model and its config are
+# re-included below.
+# catastro_emb.pt alone is 161 MB, above GitHub's 100 MB per-file hard limit, so
+# committing it is not merely inadvisable, it is rejected. It is regenerable
+# (see docs/model-artifacts.md). Recreate the curated copy locally with
+# `python deploy/prepare_artifacts.py` before every build or `railway up`
+# (see README_DEPLOY.md).
+# ---------------------------------------------------------------------------
+artifacts/*
+!artifacts/model.pt
+!artifacts/tuning.json
+!artifacts/reliability.json
+!artifacts/train_report.json
+!artifacts/gazetteer.pkl
+# catastro_docs.parquet: public cadastre (addresses, parcel ids, centroids), 21 MB.
+!artifacts/catastro_docs.parquet
+
+# Experiments: only the leaderboard and each run's small config files.
+# Never an experiment's model.pt, embeddings or row dumps.
+!artifacts/experiments/
+artifacts/experiments/*
+!artifacts/experiments/leaderboard.csv
+!artifacts/experiments/*/
+artifacts/experiments/*/*
+!artifacts/experiments/*/experiment.json
+!artifacts/experiments/*/tuning.json
+!artifacts/experiments/*/reliability.json
+
+deploy/artifacts/
+
+# Never tracked, whatever the directory: raw evaluation rows contain real
+# addresses, tensors and embeddings are large and regenerable.
+artifacts/splits/
+strict_eval_*
+*eval_rows*
+*.npz
+*.npy
+catastro_emb.pt
+
+# Large and not needed to serve.
+direcciones_ANN.ipynb
+.atl/
+.ipynb_checkpoints/
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+build/
+dist/
+
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

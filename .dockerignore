@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# PRIVACY: real citizen data. Never build these into an image.
+#   context/  insured-property registry (Fasecolda), disaster-victim registry
+#             (RUD: names and ID numbers), field inspection reports
+#   outputs/  normalization results derived from the above
+# ---------------------------------------------------------------------------
+context/
+outputs/
+
+# The full 415 MB artifacts directory (training tensors, evaluation parquets,
+# IDESC geocoder cache, sweeps, logs). The image gets deploy/artifacts/ instead,
+# the 199 MB curated copy produced by deploy/prepare_artifacts.py.
+artifacts/
+
+# Not needed to serve.
+direcciones_ANN.ipynb
+.ipynb_checkpoints/
+scripts/
+tests/
+.atl/
+.pytest_cache/
+.git/
+.gitignore
+.github/
+README_DEPLOY.md
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+.env
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+Thumbs.db
