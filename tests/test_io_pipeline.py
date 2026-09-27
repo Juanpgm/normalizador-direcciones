@@ -336,3 +336,55 @@ def test_guard_preserves_order_and_neighbours():
     assert out["estado"].tolist() == ["OK", "FUERA_DE_AREA", "OK", "FUERA_DE_AREA"]
     direct = normalize_strict(stub(), [ADDR_OK], **Tunables().as_kwargs())
     assert out.loc[0, "direccion_normalizada"] == direct.loc[0, "direccion_normalizada"]
+
+
+# ---------------------------------------------------------------------------
+# municipality guard: raw-value coercion and DIVIPOLA / long-form names
+# ---------------------------------------------------------------------------
+_CALI_RAW = [
+    76001.0, 76001, np.int64(76001), np.float64(76001.0), np.float32(76001.0), "76001", "76001000", "76001.0",
+    " 76001 ", "76001.00", "Santiago de Cali D.E.", "Distrito Especial de Santiago de Cali",
+    "DISTRITO ESPECIAL DE SANTIAGO DE CALI", "Cali", "CALI - VALLE", "Santiago de Cali, Valle del Cauca",
+    "SANTIAGO DE CALI, VALLE DEL CAUCA", "santiago de cali", "  Cali\t", "Cáli", "Cali, Colombia",
+    "Municipio de Cali", "Cali 76001", "76.001", "76 001", "76,001", "76001-000", "76.001.000",
+    "Cali Colombia 760001", "Cali DC", "Cali D.C.", "Santiago de Cali D.C.", "Santiago de Cali, Colombia",
+    "Cali CO", "Cali 11001",
+    # postal codes of Cali (6 digits, 7600xx) are Cali, not another municipality
+    "760001", 760001, "760010", "760045", "760.001", "760 099",
+]
+_OUTSIDE_RAW = [
+    "Bogota", "Bogotá D.C.", "BOGOTA, D.C.", "Palmira", "Jamundí", "Yumbo", "11001", 11001, 11001.0, "76364",
+    76364, "Calima", "Calima El Darien", "Caliente", "Santiago de Tolú", "El Cerrito", "Valle del Guamuez",
+    "76001999x", "76 364", "Bogota 11001", "Cali Palmira", "Bogota Colombia", "76364000", "11001000",
+]
+_UNKNOWN_RAW = [None, np.nan, float("nan"), pd.NA, "", "   ", "\t", "N/A", "sin dato", "-", "Valle del Cauca",
+                # all-numeric but neither a 5/8-digit DANE code nor a Cali postal code: no municipality information
+                "7600100", "110001", "770001", "1", "123", "1234567", "760", "0", 110001, 7600100,
+                False, True, np.True_, np.False_]
+
+
+@pytest.mark.parametrize("value", _CALI_RAW, ids=repr)
+def test_is_outside_cali_false_for_every_cali_form(value):
+    from cali_address.io.pipeline import is_outside_cali
+
+    assert is_outside_cali(value) is False
+
+
+@pytest.mark.parametrize("value", _OUTSIDE_RAW, ids=repr)
+def test_is_outside_cali_true_for_other_municipalities(value):
+    from cali_address.io.pipeline import is_outside_cali
+
+    assert is_outside_cali(value) is True
+
+
+@pytest.mark.parametrize("value", _UNKNOWN_RAW, ids=repr)
+def test_is_outside_cali_false_for_unknown_values(value):
+    from cali_address.io.pipeline import is_outside_cali
+
+    assert is_outside_cali(value) is False
+
+
+def test_numeric_dane_column_end_to_end_is_not_out_of_area():
+    frame = pd.DataFrame({"direccion": [ADDR_OK] * 3, "mun": [76001.0, 76001, 11001.0]})
+    out, s = _run(frame, ColumnMapping(address_col="direccion", municipality_col="mun"))
+    assert out["estado"].tolist() == ["OK", "OK", "FUERA_DE_AREA"] and s["fuera_de_area"] == 1

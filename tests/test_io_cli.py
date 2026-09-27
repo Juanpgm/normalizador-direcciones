@@ -102,7 +102,7 @@ def test_id_and_municipality_columns(tmp_path):
     assert code == 0 and _read_out(out)["estado"].tolist() == ["OK", "FUERA_DE_AREA"]
 
 
-def test_sql_source_with_table_and_query(tmp_path):
+def test_sql_source_with_table_and_view(tmp_path):
     db = tmp_path / "a.db"
     con = sqlite3.connect(db)
     synth_frame(5).to_sql("dir", con, index=False)
@@ -111,8 +111,12 @@ def test_sql_source_with_table_and_query(tmp_path):
     out = tmp_path / "out.csv"
     assert run(["normalize", url, "-o", str(out), "--table", "dir"])[0] == 0
     assert len(_read_out(out)) == 5
+    con = sqlite3.connect(db)
+    con.execute("CREATE VIEW dir_late AS SELECT id, direccion FROM dir WHERE id > '001'")
+    con.commit()
+    con.close()
     out2 = tmp_path / "out2.csv"
-    assert run(["normalize", url, "-o", str(out2), "--sql-query", "SELECT id, direccion FROM dir WHERE id > '001'"])[0] == 0
+    assert run(["normalize", url, "-o", str(out2), "--table", "dir_late"])[0] == 0
     assert len(_read_out(out2)) == 3
 
 

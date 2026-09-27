@@ -27,6 +27,7 @@ First packaged release.
 
 ### Changed
 
+- SQL input is table/view based by design (`--table [schema.]name`, session read-only where the driver supports it): there is no free-form SQL option because a text filter cannot be a security boundary for SQL, so create a database view for joins or filters.
 - `--help`, `inspect` and `formats` no longer import torch (table helpers moved to `cali_address.tables`;
   every name is still importable from `cali_address.service`).
 - Tests that need the real serving artifacts carry the `requires_artifacts` marker and are skipped when

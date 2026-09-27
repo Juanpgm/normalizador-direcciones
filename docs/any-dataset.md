@@ -14,9 +14,16 @@ python -m cali_address formats                # supported input / output formats
 Install with `pip install -e .` (see the README) and use the `cali-address` command,
 or run `python -m cali_address` from a checkout with `PYTHONPATH=src`. The examples
 below use `python -m cali_address`; `cali-address` is an exact alias.
-Exit codes: `0` ok, `2` usage / column-mapping / config error, `3` I/O error
-(missing or corrupt input, unreachable database, unwritable output). User errors
-print one `error:` line with the fix, never a traceback.
+User errors print one `error:` line with the fix, never a traceback.
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | ok (rows with `ERROR` are allowed as long as at least one row was processed normally, and an input with zero rows is fine) |
+| `1` | aborted: `--on-error raise` hit a failing row, or the run ran out of memory (nothing is written) |
+| `2` | usage / column-mapping / config error, including an invalid or unparseable database URL |
+| `3` | I/O error: missing or corrupt input, unreachable database, unwritable output, missing model artifacts |
+| `4` | the run finished but **every** row is `ERROR` (typically a broken model); the output and the summary are still written |
+| `130` | interrupted (Ctrl+C) |
 
 ## Quickstart by source
 
@@ -54,17 +61,30 @@ python -m cali_address normalize data.csv -o out.csv --address-parts via,numero,
 python -m cali_address normalize data.csv -o out.csv --address-parts via,numero --parts-sep " "
 ```
 
-**Database (SQLAlchemy URL).** Use `--table [schema.]name` or a read-only `--sql-query`
-(a single `SELECT`/`WITH`). Rows are fetched in chunks through a server-side cursor.
-Table names are validated identifiers and no user value is ever formatted into SQL.
-The query text is trusted operator input: it runs as written. Passwords are masked
-in every message. Drivers are optional: `pip install sqlalchemy` plus the driver
+**Database (SQLAlchemy URL).** Use `--table [schema.]name`; the table can be a real table or a **view**.
+There is deliberately no free-form SQL option: a text filter cannot be a security boundary for SQL, so
+for joins or filters create a read-only `VIEW` in the database and read it with `--table`. Rows are
+fetched in chunks through a server-side cursor. Table and schema names (letters, digits and `_`,
+not starting with a digit, at most one `schema.` prefix) are validated with a strict pattern and rendered by
+SQLAlchemy with identifier quoting. Identifiers are quoted exactly as given, so the case matters: on
+PostgreSQL use the lower-case name unless the table was created with quotes (an unquoted `CREATE TABLE
+Predios` is stored as `predios`). A `sqlite:///path` file that does not exist is an I/O error (exit 3); a
+read never creates it.
+The session is opened read-only where the driver supports it (SQLite: `PRAGMA query_only=ON` on every
+pooled connection; PostgreSQL through `psycopg2`, `psycopg` and `pg8000`: a read-only transaction) and
+every run ends with a rollback, never a commit. Other databases and drivers get no read-only session (no
+error either), so connect with a **read-only database account** whatever the database. Passwords and secret query parameters (`token`,
+`password`, `api_key`, `key`, `secret`, `sig`, `auth`, ...), raw and URL-encoded, are masked in every message, with one residual: a 1-2 character password is masked only
+inside a URL (`user:pw@host`), not in free text, because masking it there would shred the message. A driver
+message that echoes such a password outside a URL is therefore NOT redacted; use a password of at least 3
+characters, ideally a proper secret. An unparseable URL is a usage error (exit 2) and an unreachable
+database is an I/O error (exit 3). Drivers are optional: `pip install sqlalchemy` plus the driver
 (`psycopg2-binary` for Postgres); a missing one gives an install hint.
 
 ```
 python -m cali_address normalize sqlite:///local.db -o out.parquet --table direcciones
-python -m cali_address normalize postgresql://user:pw@host/db -o out.csv \
-    --sql-query "SELECT id, via, numero FROM predios WHERE municipio = 'Cali'" --address-parts via,numero
+# joins / filters: CREATE VIEW predios_cali AS SELECT id, via, numero FROM predios WHERE municipio = 'Cali';
+python -m cali_address normalize postgresql://user:pw@host/db -o out.csv \n    --table public.predios_cali --address-parts via,numero
 ```
 
 **GeoJSON, shapefile, GeoPackage.** GeoJSON (`FeatureCollection`) and shapefile
@@ -138,11 +158,15 @@ other result column is empty.
   Text formats are read as text, so ids like `007` and addresses like `NA` are preserved.
 * **Out-of-area guard.** With `--municipality-col`, a non-empty municipality that is not
   Cali is reported as `FUERA_DE_AREA` without matching. Accepted as Cali (accent and case
-  insensitive): `Cali`, `Santiago de Cali`, `Cali - Valle`, `Cali, Valle del Cauca`,
-  `76001`. Empty or placeholder values are not guarded.
+  insensitive, whole words only): `Cali`, `Santiago de Cali`, `Santiago de Cali D.E.`,
+  `Distrito Especial de Santiago de Cali`, `Cali - Valle`, `Cali, Valle del Cauca`, and the DANE
+  code as text or number (`76001`, `76001.0`, `76001000`). Words such as `Calima` or `Caliente`
+  are other municipalities. Empty or placeholder values (and a bare `Valle del Cauca`) are not guarded.
 * **Order and count** of the input are preserved for any `--chunk-size`; output is
-  deterministic. The output file is written to a temporary file and moved into place
-  only on success, so a failed run never leaves a truncated file or clobbers a previous one.
+  deterministic. The output file is written to a temporary file next to it and moved into
+  place only on success, so a failed run never leaves a truncated file or clobbers a previous
+  one. **An existing output file is overwritten** on success (no prompt, no backup), even when
+  `-o` is the input path itself: the input is closed before the replacement.
 * Matching results are identical to the legacy `scripts/normalizar.py` and the API for the
   same rows and options (the run is `normalize_strict` on every chunk).
 
@@ -158,7 +182,10 @@ them and writes nothing.
 
 `--config run.toml` accepts the same options (`-` or `_`), flat or grouped in tables.
 Precedence: defaults < config file < command line. Unknown keys and malformed TOML are
-errors (exit 2).
+errors (exit 2). Relative paths inside the file (`input`, `output`, `summary_json`,
+`artifacts_dir`, `basemaps`) are resolved against the **config file's directory**, so the file
+works from any working directory; URLs and absolute paths are left as written. Paths given on the
+command line stay relative to the current directory and win over the file.
 
 ```toml
 input = "reporte.xlsx"
@@ -180,6 +207,14 @@ The tunables are the same as the legacy CLI: `--min-struct`, `--plate-tolerance`
 `--gazetteer/--no-gazetteer`, `--soft-rules`, `--max-soft`, `--gate-fallback`,
 `--threshold`, `--device`, `--artifacts-dir`, `--basemaps`. Defaults equal today's
 CLI and API behaviour.
+
+Environment: the CLI reads `CALI_ARTIFACTS_DIR` for the default `--artifacts-dir`. The HTTP API
+and the Docker image use a different variable, `ARTIFACTS_DIR`; setting one does not affect the
+other.
+
+`--artifacts-dir` is trusted local input: `model.pt` is loaded with
+`torch.load(weights_only=False)`, which can execute code from the file. Never point it at
+artifacts from an untrusted source.
 
 ## Performance
 
@@ -203,6 +238,8 @@ CLI and API behaviour.
 * Header auto-detection is a heuristic; when `inspect` shows a wrong header, pass
   `--header-row`.
 * A CSV row with more non-empty fields than the header is an error (exit 3, with the line number), never silently truncated; short rows are padded and trailing separators ignored.
+* Zipped shapefiles and other archives are read whole, with **no cap on the decompressed size**
+  (a zip bomb is not detected); only feed the CLI files you trust. Known limitation.
 * A `.txt` with no delimiter is treated as one address per line without a header.
 * The HTTP API keeps its own upload path (three statuses only); it does not emit `ERROR` /
   `FUERA_DE_AREA`.

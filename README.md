@@ -23,7 +23,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e .                    # core: the cali-address command
 pip install -e ".[excel,sql,geo]"   # optional input/output formats
 pip install -e ".[api]"             # HTTP API
-pip install -e ".[dev]"             # tests
+pip install -e ".[dev,api,sql,excel,geo]"   # tests (what CI runs)
 pip install -e ".[all]"             # everything except dev
 ```
 
@@ -60,10 +60,12 @@ cali-address normalize report.xlsx -o out.xlsx --sheet Inspections --header-row 
 # Address split across several columns
 cali-address normalize data.csv -o out.csv --address-parts via,numero,complemento
 
-# SQL source (SQLAlchemy URL) with a read-only query
+# SQL source (SQLAlchemy URL): --table takes a table or a VIEW (for joins or filters, create a view in the
+# database). The session is read-only where the driver supports it (SQLite, PostgreSQL via psycopg2/psycopg/
+# pg8000) and rolled back; still use a read-only database account. See docs/any-dataset.md.
 cali-address normalize sqlite:///local.db -o out.parquet --table direcciones
 cali-address normalize postgresql://user:pw@host/db -o out.csv \
-    --sql-query "SELECT id, via, numero FROM predios" --address-parts via,numero
+    --table public.predios_cali --address-parts via,numero
 
 # Same options from a TOML file (command line flags override it)
 cali-address normalize --config run.toml
@@ -85,8 +87,12 @@ min_struct = 0.6
 ambiguity_delta = 0.02
 ```
 
-`python -m cali_address ...` is equivalent. Exit codes: `0` ok, `2` usage / mapping / config error,
-`3` I/O error (including missing artifacts).
+`python -m cali_address ...` is equivalent. Exit codes: `0` ok, `1` aborted (`--on-error raise` or out of
+memory), `2` usage / mapping / config error, `3` I/O error (including missing artifacts), `4` every row
+failed (output and summary are still written), `130` interrupted. Notes: an existing output file is overwritten; relative
+paths inside a `--config` file are relative to that file; the CLI reads `CALI_ARTIFACTS_DIR` while the API
+and Docker use `ARTIFACTS_DIR`; `--artifacts-dir` must be trusted (`model.pt` is loaded with
+`torch.load(weights_only=False)`). Details: [docs/any-dataset.md](docs/any-dataset.md).
 
 ## Output columns
 

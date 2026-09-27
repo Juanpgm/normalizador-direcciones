@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from os import PathLike
 from typing import Callable, Iterable, Iterator
 
+import numpy as np
 import pandas as pd
 
 from ..gazetteer import ZONE_BUFFER_M
@@ -107,22 +108,64 @@ def coerce_raw(value):
 # ---------------------------------------------------------------------------
 # municipality guard
 # ---------------------------------------------------------------------------
-_CALI_FORMS = {"cali", "santiago de cali", "76001"}
-_SUFFIX = re.compile(r"(?: (?:valle del cauca|valle|colombia))+$")
+#: Words that carry no municipality identity (administrative forms, department, country).
+_FILLER_TOKENS = frozenset({
+    "municipio", "distrito", "especial", "de", "del", "d", "e", "c", "dc", "co", "valle", "cauca", "colombia",
+    "departamento",
+})
+#: What is left after dropping the fillers when the value names Cali ("santiago de cali" -> {santiago, cali}).
+_CALI_TOKEN_SETS = ({"cali"}, {"santiago", "cali"})
+_DANE_CALI = re.compile(r"^76001(?:000)?$")  # DIVIPOLA: municipality (5 digits) or its head settlement (8)
+
+_CALI_POSTAL = re.compile(r"^7600\d\d$")  # postal codes of Cali (760001...): 6 digits, prefix 7600
+_DANE_LENGTHS = (5, 8)  # a DANE code that is not Cali's stays a distinct (outside) key; any other length is unknown
+
+
+def _municipality_text(value) -> str:
+    """Raw cell (str / int / float / numpy scalar) -> text; integral floats lose the ``.0``."""
+    if isinstance(value, (float, np.floating)):
+        number = float(value)
+        return str(int(number)) if number.is_integer() else str(number)
+    return str(value)
 
 
 def _municipality_key(value) -> str:
-    text = unicodedata.normalize("NFKD", str(value)).encode("ascii", "ignore").decode("ascii").lower()
+    """Canonical token string; DIVIPOLA codes of Cali collapse to ``cali``.
+
+    Matching is by WHOLE tokens after dropping filler words, so 'Calima' or 'Caliente'
+    (which merely contain 'cali') stay outside, while 'Distrito Especial de Santiago de
+    Cali', 'Cali - Valle', 'Cali DC' or '76001.0' are Cali. A value that is only fillers
+    ('Valle del Cauca') yields ``""`` = no municipality information.
+
+    Digits: a value that is ENTIRELY numeric ('76001', '76.001', '76 001', '76001.0') is a DANE code
+    (Cali or not) when it has 5 or 8 digits; 6 digits starting with 7600 are Cali postal codes (Cali);
+    any other all-numeric value is unknown (``""``), never "outside". Digit tokens next to words ('Cali Colombia 760001', a postal code) carry no
+    identity when a word names Cali and are otherwise kept.
+    """
+    text = unicodedata.normalize("NFKD", _municipality_text(value)).encode("ascii", "ignore").decode("ascii").lower()
+    text = text.strip()
+    if re.fullmatch(r"\d[\d.,\s-]*", text):  # whole value numeric: one DANE code, any thousands separator
+        text = re.sub(r"^(\d+)[.,]0+$", r"\g<1>", text)  # "76001.0" -> "76001"
+        digits = re.sub(r"\D", "", text)
+        if _DANE_CALI.match(digits) or _CALI_POSTAL.match(digits):
+            return "cali"
+        return digits if len(digits) in _DANE_LENGTHS else ""  # other numbers carry no municipality identity
     text = re.sub(r"[^a-z0-9]+", " ", text).strip()
-    text = re.sub(r"^municipio de ", "", text)
-    return _SUFFIX.sub("", text)
+    tokens = [t for t in text.split() if t not in _FILLER_TOKENS]
+    words = [t for t in tokens if not t.isdigit()]
+    if words:
+        return "cali" if set(words) in _CALI_TOKEN_SETS else " ".join(tokens)
+    return "cali" if tokens and all(_DANE_CALI.match(t) for t in tokens) else " ".join(tokens)
 
 
 def is_outside_cali(value) -> bool:
     """True only for a non-empty municipality that is clearly not Cali."""
-    if _is_missing(value) or is_unspecified(value):
+    if isinstance(value, (bool, np.bool_)):  # a flag, not a municipality
         return False
-    return _municipality_key(value) not in _CALI_FORMS
+    if _is_missing(value) or (isinstance(value, np.floating) and np.isnan(value)) or is_unspecified(value):
+        return False
+    key = _municipality_key(value)
+    return bool(key) and key != "cali"
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +204,9 @@ class _Runner:
             return []
         try:
             return self._call(raws).to_dict(orient="records")
-        except Exception as exc:
+        except MemoryError:  # not a property of one row: bisecting would only repeat the exhaustion
+            raise
+        except Exception as exc:  # KeyboardInterrupt / SystemExit are BaseException: never caught here
             if self.on_error == "raise":
                 raise
             if len(raws) == 1:
@@ -174,6 +219,8 @@ class _Runner:
         if not skip:
             try:
                 return self._call(raws)
+            except MemoryError:
+                raise
             except Exception:
                 if self.on_error == "raise":
                     raise
@@ -281,7 +328,7 @@ def normalize_dataset(
 
     ``source``: a path / http(s) URL / SQLAlchemy URL (``read_options`` are forwarded to
     :func:`read_table`: ``fmt``, ``encoding``, ``delimiter``, ``sheet``, ``header_row``,
-    ``table``, ``query``), an open :class:`TableChunks`, a ``DataFrame`` or an iterable of
+    ``table``), an open :class:`TableChunks`, a ``DataFrame`` or an iterable of
     ``DataFrame`` chunks.
 
     ``progress(rows_done, chunk_number)`` is called after each chunk is written;
@@ -294,36 +341,38 @@ def normalize_dataset(
         raise UsageError(f"chunk_size must be a positive integer (got {chunk_size!r})")
     started = time.perf_counter()
     columns, chunks, warnings, meta = _open_source(source, chunk_size, read_options)
-    resolved = mapping.resolve(columns)  # fail fast, before any normalization work
-    layout = _output_layout(resolved)
-    source_cols, result_cols, rename, _ = layout
-    out_columns = [rename.get(c, c) for c in source_cols] + result_cols
-    runner = _Runner(normalizer, gazetteer, tunables or Tunables(), on_error)
-    totals = _Totals()
-    offset = 0
-    wrote_any = False
-    for chunk in chunks:
-        if [str(c) for c in chunk.columns] != columns:
-            raise SourceReadError(
-                f"the columns changed between chunks (expected {columns}, got {list(chunk.columns)})"
-            )
-        if limit is not None:
-            chunk = chunk.iloc[: max(limit - offset, 0)]
-            if not len(chunk):
+    try:
+        resolved = mapping.resolve(columns)  # fail fast, before any normalization work
+        layout = _output_layout(resolved)
+        source_cols, result_cols, rename, _ = layout
+        out_columns = [rename.get(c, c) for c in source_cols] + result_cols
+        runner = _Runner(normalizer, gazetteer, tunables or Tunables(), on_error)
+        totals = _Totals()
+        offset = 0
+        wrote_any = False
+        for chunk in chunks:
+            if [str(c) for c in chunk.columns] != columns:
+                raise SourceReadError(
+                    f"the columns changed between chunks (expected {columns}, got {list(chunk.columns)})"
+                )
+            if limit is not None:
+                chunk = chunk.iloc[: max(limit - offset, 0)]
+                if not len(chunk):
+                    break
+            result = _process_chunk(chunk, resolved, runner, layout)
+            sink.write(result)
+            wrote_any = True
+            totals.add(result, offset)
+            offset += len(result)
+            if progress is not None:
+                progress(offset, totals.chunks)
+            if limit is not None and offset >= limit:
                 break
-        result = _process_chunk(chunk, resolved, runner, layout)
-        sink.write(result)
-        wrote_any = True
-        totals.add(result, offset)
-        offset += len(result)
-        if progress is not None:
-            progress(offset, totals.chunks)
-        if limit is not None and offset >= limit:
-            break
-    if not wrote_any:
-        sink.write(pd.DataFrame(columns=out_columns))
-    if hasattr(chunks, "close"):
-        chunks.close()
+        if not wrote_any:
+            sink.write(pd.DataFrame(columns=out_columns))
+    finally:  # every path (success, error, KeyboardInterrupt) releases files / DB connections
+        if hasattr(chunks, "close"):
+            chunks.close()
 
     seconds = time.perf_counter() - started
     by = totals.by_estado

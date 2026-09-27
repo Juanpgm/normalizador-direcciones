@@ -10,6 +10,7 @@ Unknown keys are rejected (a typo would otherwise silently do nothing).
 
 from __future__ import annotations
 
+import os
 import tomllib
 
 from .errors import ConfigError
@@ -28,7 +29,7 @@ OPTION_KINDS: dict[str, str] = {
     "sheet": _STR, "header_row": _NON_NEG_INT, "delimiter": _STR, "encoding": _STR,
     "address_col": _STR, "address_parts": _LIST, "parts_sep": _STR, "id_col": _STR,
     "municipality_col": _STR, "lat_col": _STR, "lon_col": _STR, "keep_columns": _LIST,
-    "chunk_size": _POS_INT, "sql_query": _STR, "table": _STR,
+    "chunk_size": _POS_INT, "table": _STR,
     "artifacts_dir": _STR, "basemaps": _STR, "device": _STR, "threshold": _FLOAT,
     "min_struct": _FLOAT, "plate_tolerance": _INT, "ambiguity_delta": _FLOAT,
     "barrio_buffer": _FLOAT, "zone_buffer": _FLOAT, "gate_escalate": _BOOL,
@@ -105,6 +106,27 @@ def load_config(path: str) -> dict:
             f"Valid options: {', '.join(sorted(OPTION_KINDS))}"
         )
     return {key: _coerce(key, value) for key, value in flat.items()}
+
+
+#: Options that hold a filesystem path. In a config file a relative one is relative to that file's directory.
+PATH_OPTIONS = ("input", "output", "summary_json", "artifacts_dir", "basemaps")
+
+
+def resolve_config_paths(options: dict, base_dir: str) -> dict:
+    """Copy of ``options`` with relative path options made absolute against ``base_dir``.
+
+    URLs (anything with ``://``: http(s), SQLAlchemy) and empty values are left as written; a leading ``~``
+    is expanded to the home directory; absolute paths are unchanged. Command line values never go through here (they stay relative to the CWD).
+    """
+    resolved = dict(options)
+    for key in PATH_OPTIONS:
+        value = resolved.get(key)
+        if isinstance(value, str) and value.startswith("~"):
+            value = resolved[key] = os.path.normpath(os.path.expanduser(value))  # "~" / "~/x": the user's home, not <cfgdir>/~
+        if not isinstance(value, str) or not value or "://" in value or os.path.isabs(value):
+            continue
+        resolved[key] = os.path.normpath(os.path.join(base_dir, value))
+    return resolved
 
 
 def merge_options(defaults: dict, file_options: dict, cli_options: dict) -> dict:

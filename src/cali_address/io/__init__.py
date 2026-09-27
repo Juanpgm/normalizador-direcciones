@@ -9,7 +9,7 @@ Public surface (see ``docs/any-dataset.md``):
 * :mod:`cali_address.io.config` - the ``--config`` TOML layer
 """
 
-from .config import load_config, merge_options
+from .config import load_config, merge_options, resolve_config_paths
 from .errors import (
     ConfigError,
     DatasetError,
@@ -47,7 +47,7 @@ __all__ = [
     "TableChunks", "Tunables", "UnsupportedFormatError", "UsageError", "describe_reader_formats",
     "describe_writer_formats", "infer_format", "infer_sink_format", "list_reader_formats",
     "list_writer_formats", "load_config", "merge_options", "normalize_dataset", "open_sink", "read_table",
-    "register_reader", "register_writer",
+    "register_reader", "register_writer", "resolve_config_paths",
 ]
 
 

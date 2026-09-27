@@ -1,8 +1,9 @@
 """Command line: ``python -m cali_address {normalize,inspect,formats}``.
 
-Exit codes: 0 ok, 2 usage / mapping / config error, 3 I/O error (missing or
-corrupt input, unreachable database, unwritable output). User errors print one
-``error:`` line (plus actionable hints) to stderr, never a traceback.
+Exit codes: 0 ok, 1 aborted (``--on-error raise`` hit a failing row, or out of memory), 2 usage / mapping /
+config error, 3 I/O error (missing or corrupt input, unreachable database, unwritable output, missing model
+artifacts), 4 the run finished but EVERY row was ERROR (e.g. a broken model; the output and summary are still
+written). User errors print one ``error:`` line (plus actionable hints) to stderr, never a traceback.
 
 The pre-existing ``scripts/normalizar.py`` keeps working unchanged; this CLI adds
 any-format input, column mapping, chunked streaming and a run summary.
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import time
@@ -34,9 +36,13 @@ from .io import (
     merge_options,
     open_sink,
     read_table,
+    resolve_config_paths,
 )
+from .io.readers import redact_source
 
-EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_IO = 0, 1, 2, 3
+log = logging.getLogger(__name__)
+
+EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_IO, EXIT_ALL_ROWS_FAILED = 0, 1, 2, 3, 4
 PROG = "python -m cali_address"
 
 
@@ -104,8 +110,7 @@ def _add_source_options(p: argparse.ArgumentParser) -> None:
                    help="0-based header row; detected automatically when omitted")
     p.add_argument("--delimiter", type=_delimiter, help="CSV delimiter (default: sniffed among , ; TAB |)")
     p.add_argument("--encoding", help="text encoding (default: BOM / UTF-8 / cp1252 detected)")
-    p.add_argument("--table", help="table name for SQL sources ([schema.]table) or layer name for GPKG")
-    p.add_argument("--sql-query", help="read-only SELECT for SQL sources (alternative to --table)")
+    p.add_argument("--table", help="table or view name for SQL sources ([schema.]name) or layer name for GPKG")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -193,7 +198,7 @@ def _report(exc: Exception) -> int:
 # ---------------------------------------------------------------------------
 def _cli_options(args: argparse.Namespace) -> dict:
     keys = ["input", "output", "output_format", "format", "sheet", "header_row", "delimiter", "encoding", "table",
-            "sql_query", "address_col", "address_parts", "parts_sep", "id_col", "municipality_col", "lat_col",
+            "address_col", "address_parts", "parts_sep", "id_col", "municipality_col", "lat_col",
             "lon_col", "keep_columns", "chunk_size", "on_error", "artifacts_dir", "basemaps", "threshold",
             "min_struct", "plate_tolerance", "ambiguity_delta", "barrio_buffer", "zone_buffer", "gate_escalate",
             "gazetteer", "soft_rules", "max_soft", "gate_fallback", "device", "dry_run", "summary_json"]
@@ -204,7 +209,6 @@ def _read_kwargs(opts: dict) -> dict:
     return {
         "fmt": opts.get("format"), "encoding": opts.get("encoding"), "delimiter": opts.get("delimiter"),
         "sheet": opts.get("sheet"), "header_row": opts.get("header_row"), "table": opts.get("table"),
-        "query": opts.get("sql_query"),
     }
 
 
@@ -242,7 +246,9 @@ def _print_summary(summary: dict, elapsed_note: str = "") -> None:
 def _cmd_normalize(args, normalizer_factory, gazetteer_loader) -> int:
     from .io.pipeline import Tunables, normalize_dataset  # lazy: pulls in the model stack
 
-    file_options = load_config(args.config) if args.config else {}
+    file_options = {}
+    if args.config:  # relative paths in the file are relative to the file, not to the CWD
+        file_options = resolve_config_paths(load_config(args.config), os.path.dirname(os.path.abspath(args.config)))
     if file_options.get("no_gazetteer") is True and "gazetteer" not in file_options:
         file_options["gazetteer"] = False
     file_options.pop("no_gazetteer", None)
@@ -275,57 +281,61 @@ def _cmd_normalize(args, normalizer_factory, gazetteer_loader) -> int:
 
     # Everything that can fail on the user's side happens BEFORE the (slow) model is loaded.
     reader = read_table(source, chunk_size=opts["chunk_size"], **_read_kwargs(opts))
+    sink = None
+    published = False
     try:
         mapping.resolve(reader.columns)
         sink = MemorySink() if dry_run else open_sink(opts["output"], opts.get("output_format"))
-    except BaseException:
-        reader.close()
-        raise
-    for warning in reader.warnings:
-        print(f"warning: {warning}", file=sys.stderr)
+        for warning in reader.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
 
-    try:
-        normalizer = normalizer_factory(opts["artifacts_dir"], opts.get("device"))
-    except ArtifactsMissingError as exc:
-        sink.abort()
-        reader.close()
-        _err(str(exc))
-        return EXIT_IO
-    except (FileNotFoundError, OSError) as exc:
-        sink.abort()
-        reader.close()
-        _err(f"cannot load the model artifacts from {opts['artifacts_dir']!r}: {exc}. Use --artifacts-dir.")
-        return EXIT_IO
-    if tunables.threshold is not None:
-        normalizer.threshold = float(tunables.threshold)
-    gazetteer = None
-    if opts["gazetteer"]:
-        gazetteer = gazetteer_loader(opts["basemaps"], warn=lambda message: print(message, file=sys.stderr))
+        try:
+            normalizer = normalizer_factory(opts["artifacts_dir"], opts.get("device"))
+        except ArtifactsMissingError as exc:
+            _err(str(exc))
+            return EXIT_IO
+        except (FileNotFoundError, OSError) as exc:
+            _err(f"cannot load the model artifacts from {opts['artifacts_dir']!r}: {exc}. Use --artifacts-dir.")
+            return EXIT_IO
+        if tunables.threshold is not None:
+            normalizer.threshold = float(tunables.threshold)
+        gazetteer = None
+        if opts["gazetteer"]:
+            gazetteer = gazetteer_loader(opts["basemaps"], warn=lambda message: print(message, file=sys.stderr))
 
-    tty = sys.stderr.isatty()
+        tty = sys.stderr.isatty()
 
-    def progress(done: int, chunk_no: int) -> None:
-        if tty:
-            print(f"\r  {done} rows", end="", file=sys.stderr, flush=True)
+        def progress(done: int, chunk_no: int) -> None:
+            if tty:
+                print(f"\r  {done} rows", end="", file=sys.stderr, flush=True)
 
-    try:
-        summary = normalize_dataset(
-            reader, mapping, sink, normalizer=normalizer, gazetteer=gazetteer, chunk_size=opts["chunk_size"],
-            on_error=opts["on_error"], progress=progress, tunables=tunables, limit=dry_run,
-        )
-    except DatasetError:
-        sink.abort()
-        raise
-    except Exception as exc:
-        sink.abort()
-        if opts["on_error"] == "raise":  # the caller asked for fail-fast: report it, without a traceback
-            _err(f"aborted by --on-error raise: {type(exc).__name__}: {exc}")
+        try:
+            summary = normalize_dataset(
+                reader, mapping, sink, normalizer=normalizer, gazetteer=gazetteer, chunk_size=opts["chunk_size"],
+                on_error=opts["on_error"], progress=progress, tunables=tunables, limit=dry_run,
+            )
+        except DatasetError:
+            raise
+        except MemoryError:
+            _err("out of memory; nothing was written. Retry with a smaller --chunk-size.")
             return EXIT_FAILED
-        raise
-    except BaseException:
-        sink.abort()
-        raise
-    sink.close()
+        except Exception as exc:
+            if opts["on_error"] == "raise":  # the caller asked for fail-fast: report it, without a traceback
+                _err(f"aborted by --on-error raise: {type(exc).__name__}: {exc}")
+                return EXIT_FAILED
+            raise
+        reader.close()  # release the input before publishing: -o may be the input path itself (Windows locks it)
+        sink.close()
+        published = True
+    finally:
+        try:
+            if sink is not None and not published:
+                try:
+                    sink.abort()  # no partial output on any failure path, KeyboardInterrupt included
+                except Exception as abort_exc:  # never mask the error that got us here
+                    log.debug("sink.abort() failed: %s", abort_exc)
+        finally:
+            reader.close()
     if tty:
         print(file=sys.stderr)
 
@@ -345,6 +355,10 @@ def _cmd_normalize(args, normalizer_factory, gazetteer_loader) -> int:
         except OSError as exc:
             _err(f"cannot write the summary to {target}: {exc}")
             return EXIT_IO
+    if summary["rows"] > 0 and summary["error"] == summary["rows"]:
+        _err(f"every row failed ({summary['error']} of {summary['rows']} are ERROR); the model or its inputs are "
+             "probably broken. The output and the summary were still written.")
+        return EXIT_ALL_ROWS_FAILED
     return EXIT_OK
 
 
@@ -384,7 +398,7 @@ def _cmd_inspect(args) -> int:
         columns = reader.columns
         preview = (first.head(5) if first is not None else pd.DataFrame(columns=columns))
         info = {
-            "source": source, "format": reader.format, "delimiter": reader.delimiter, "encoding": reader.encoding,
+            "source": redact_source(source), "format": reader.format, "delimiter": reader.delimiter, "encoding": reader.encoding,
             "header_row": reader.header_row, "sheets": reader.sheet_names, "columns": list(columns),
             "warnings": list(reader.warnings),
         }
@@ -439,7 +453,7 @@ def _cmd_formats() -> int:
     table("input formats:", describe_reader_formats())
     print()
     table("output formats:", describe_writer_formats())
-    print("\nSQL sources: pass a SQLAlchemy URL (sqlite:///f.db, postgresql://u:p@host/db) with --table or --sql-query.")
+    print("\nSQL sources: pass a SQLAlchemy URL (sqlite:///f.db, postgresql://u:p@host/db) with --table (a table or a view).")
     return EXIT_OK
 
 

@@ -131,7 +131,6 @@ class ReadOptions:
     sheet: str | None = None
     header_row: int | None = None
     table: str | None = None
-    query: str | None = None
 
 
 @dataclass
@@ -208,7 +207,7 @@ def infer_format(source: str) -> str:
         return _EXTENSIONS[ext]
     supported = ", ".join(sorted(_EXTENSIONS))
     raise UnsupportedFormatError(
-        f"cannot infer the format of {source!r} (extension {ext or '(none)'}). "
+        f"cannot infer the format of {redact_source(source)!r} (extension {ext or '(none)'}). "
         f"Supported extensions: {supported}. Use --format to force one, or a SQLAlchemy URL for a database."
     )
 
@@ -226,7 +225,6 @@ def read_table(
     sheet: str | None = None,
     header_row: int | None = None,
     table: str | None = None,
-    query: str | None = None,
 ) -> TableChunks:
     """Open ``source`` (path, http(s) URL or SQLAlchemy URL) as a chunk iterator."""
     if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size < 1:
@@ -235,7 +233,7 @@ def read_table(
         raise UsageError(f"header_row must be a non-negative integer (got {header_row!r})")
     source = os.fspath(source)
     resolved = _canonical_format(fmt) if fmt else infer_format(source)
-    opts = ReadOptions(chunk_size, encoding, delimiter, sheet, header_row, table, query)
+    opts = ReadOptions(chunk_size, encoding, delimiter, sheet, header_row, table)
 
     cleanup: list[Callable[[], None]] = []
     path = source
@@ -263,15 +261,15 @@ def read_table(
 
 def _check_local_file(path: str) -> None:
     if not os.path.exists(path):
-        raise SourceReadError(f"input file not found: {path}")
+        raise SourceReadError(f"input file not found: {redact_source(path)}")
     if os.path.isdir(path):
-        raise SourceReadError(f"input path is a directory, not a file: {path}")
+        raise SourceReadError(f"input path is a directory, not a file: {redact_source(path)}")
     try:
         size = os.path.getsize(path)
     except OSError as exc:
-        raise SourceReadError(f"cannot read {path}: {exc}") from exc
+        raise SourceReadError(f"cannot read {redact_source(path)}: {exc}") from exc
     if size == 0:
-        raise SourceReadError(f"input file is empty (0 bytes): {path}")
+        raise SourceReadError(f"input file is empty (0 bytes): {redact_source(path)}")
 
 
 def _download(url: str, cleanup: list) -> str:
@@ -282,7 +280,14 @@ def _download(url: str, cleanup: list) -> str:
         with os.fdopen(fd, "wb") as out, urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310
             shutil.copyfileobj(response, out, length=1024 * 1024)
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        raise SourceReadError(f"cannot download {url}: {exc}") from exc
+        failure = exc
+    else:
+        failure = None
+    if failure is not None:  # raised outside the handler so the raw exception is neither __cause__ nor __context__
+        secrets = _url_secrets(url)
+        raise SourceReadError(
+            f"cannot download {redact_source(url)}: {_short(failure, secrets)}"
+        ) from _redacted_cause(failure, secrets)
     _check_local_file(tmp)
     return tmp
 
@@ -853,92 +858,236 @@ def _read_gpkg(path: str, o: ReadOptions, fmt: str) -> _Opened:
 # ---------------------------------------------------------------------------
 # SQL
 # ---------------------------------------------------------------------------
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
-_LEADING_COMMENTS = re.compile(r"^(?:\s+|--[^\n]*(?:\n|$)|/\*.*?\*/)+", re.S)
-_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+#: ``user:PASSWORD@`` in a URL: everything up to the LAST ``@`` is the password, because a raw ``@``, ``/``, ``#`` or
+#: ``?`` inside it makes SQLAlchemy's own parser split it wrongly (and leak the tail). Over-masking is the safe side.
+_USERINFO_PASSWORD = re.compile(r"^([^:/?#@]+://[^:/?#@]*:).*@")
+#: Query parameters that carry a secret (``?password=..``, ``?sslpassword=..``, ``?passwd=..``, ``?token=..``).
+_SECRET_QUERY_PARAM = re.compile(
+    r"(?i)([?&](?:[a-z0-9_.-]*(?:pass|pwd|secret|token|api_?key|credential)[a-z0-9_.-]*|key|sig|signature|auth)=)[^&#\s]*"
+)
+
+
+def _mask_text(url: str) -> str:
+    """``url`` with the userinfo password and secret query values replaced by ``***`` (pure text, never raises)."""
+    return _SECRET_QUERY_PARAM.sub(r"\1***", _USERINFO_PASSWORD.sub(r"\1***@", url))
 
 
 def redact_url(url: str) -> str:
-    """The SQLAlchemy URL with its password masked (safe to print)."""
+    """The SQLAlchemy URL with its password (userinfo or query string) masked (safe to print)."""
     try:
         from sqlalchemy.engine import make_url
 
-        return make_url(url).render_as_string(hide_password=True)
+        rendered = make_url(_USERINFO_PASSWORD.sub(r"\1***@", url)).render_as_string(hide_password=True)
+        return _SECRET_QUERY_PARAM.sub(r"\1***", rendered)
     except Exception:
         return "<unparseable url>"
 
 
 def _validate_table(name: str) -> tuple[str | None, str]:
     parts = name.split(".")
-    if len(parts) > 2 or not all(_IDENTIFIER.match(p) for p in parts):
+    if len(parts) > 2 or not all(_IDENTIFIER.fullmatch(p) for p in parts):
         raise UsageError(
-            f"invalid table name {name!r}: use [schema.]table with letters, digits and underscores only "
-            "(use --sql-query for anything else)"
+            f"invalid table name {name!r}: use [schema.]table with letters, digits and underscores only (not starting with a digit) "
+            "(for joins or filters, create a database VIEW and read it with --table)"
         )
     return (parts[0], parts[1]) if len(parts) == 2 else (None, parts[0])
 
 
-def _validate_query(query: str) -> str:
-    text = _LEADING_COMMENTS.sub("", query).strip().rstrip(";").strip()
-    if not re.match(r"(?is)^(select|with)\b", text):
-        raise UsageError("--sql-query must be a single read-only SELECT (or WITH ... SELECT) statement")
-    if ";" in _STRING_LITERAL.sub("''", text):
-        raise UsageError("--sql-query must hold a single statement (found ';')")
-    return text
+def redact_source(source: str) -> str:
+    """``source`` made safe to print: a URL loses its password, anything else is returned unchanged."""
+    if "://" not in source:
+        return source
+    masked = redact_url(source)
+    if masked != "<unparseable url>":
+        return masked
+    return _mask_text(source)
 
 
-def _short(exc: Exception, secret: str | None) -> str:
-    text = " ".join(str(exc).split())[:300]
-    return text.replace(secret, "***") if secret else text
+def _url_password(url: str) -> list[str]:
+    """Every spelling of the password embedded in ``url`` (empty when there is none)."""
+    forms: list[str] = []
+    try:
+        forms += _secret_forms(urllib.parse.urlsplit(url).password)
+    except ValueError:
+        pass
+    match = re.match(r"^[^:/?#]+://[^:/@]*:(.*)@", url)
+    if match:
+        forms.append(match.group(1))
+    return sorted({f for f in forms if f}, key=len, reverse=True)
+
+
+def _url_secrets(url: str) -> list[str]:
+    """Every secret embedded in ``url`` (userinfo password and secret query values), in every spelling."""
+    forms = set(_url_password(url))
+    for match in _SECRET_QUERY_PARAM.finditer(url):
+        value = match.group(0).split("=", 1)[1]
+        if value:
+            forms.update(_secret_forms(value))
+            forms.update(_secret_forms(urllib.parse.unquote_plus(value)))
+    return sorted((f for f in forms if f), key=len, reverse=True)
+
+
+class _RedactedCause(Exception):
+    """Stands in for a driver exception in ``__cause__``: same type name and message, secrets masked."""
+
+
+def _redacted_cause(exc: BaseException, secrets: Iterable[str]) -> _RedactedCause:
+    return _RedactedCause(f"{type(exc).__name__}: {_short(exc, list(secrets))}")
+
+
+def _secret_forms(password: str | None) -> list[str]:
+    """Every spelling of a password that could appear in an error message (raw and URL-encoded)."""
+    if not password:
+        return []
+    forms = {password, urllib.parse.quote(password, safe=""), urllib.parse.quote(password),
+             urllib.parse.quote_plus(password)}
+    return sorted((f for f in forms if f), key=len, reverse=True)
+
+
+_MIN_FREE_TEXT_SECRET = 3
+
+
+def _short(exc: Exception, secret: str | Iterable[str] | None) -> str:
+    text = " ".join(str(exc).split())
+    secrets = [secret] if isinstance(secret, str) else list(secret or [])
+    forms = sorted({f for s in secrets for f in [s, *_secret_forms(s)] if f}, key=len, reverse=True)
+    for form in forms:
+        if len(form) >= _MIN_FREE_TEXT_SECRET:  # a 1-2 char secret would shred the message; see below
+            text = re.sub(re.escape(form), "***", text, flags=re.I)
+    for form in forms:  # structurally, inside any URL's userinfo, whatever the length
+        text = re.sub(r"(://[^\s:/@]*:)" + re.escape(form) + r"(@)", r"\1***\2", text)
+    return text[:300]
+
+
+def _run_all(steps: Iterable[Callable[[], None]]) -> None:
+    """Run every step even if some raise; re-raise the FIRST error at the end (later ones never mask it)."""
+    first: Exception | None = None
+    for step in steps:
+        try:
+            step()
+        except Exception as exc:
+            if first is None:
+                first = exc
+    if first is not None:
+        raise first
+
+
+def _missing_sqlite_file(url) -> str | None:
+    """Absolute path of the SQLite database file ``url`` points to when it does not exist, else ``None``.
+
+    In-memory databases (``sqlite://``, ``:memory:``) and anything that is not a plain file path are never "missing".
+    """
+    database = url.database
+    if not database or database.startswith(":memory:"):
+        return None
+    if str(url.query.get("uri", "")).lower() in ("1", "true", "yes"):
+        if not database.startswith("file:"):
+            return None
+        database = urllib.parse.unquote(urllib.parse.urlsplit(database).path)
+        if not database or database.startswith(":memory:"):
+            return None
+    path = os.path.abspath(database)
+    return None if os.path.exists(path) else path
+
+
+def _implements_readonly(dialect) -> bool:
+    """True for a PostgreSQL dialect whose driver implements SQLAlchemy's ``postgresql_readonly`` option.
+
+    ``psycopg2``, ``psycopg``, ``pg8000`` (and the async ``asyncpg`` / ``psycopg_async``, which a sync engine cannot
+    connect with anyway) override ``set_readonly``; the base ``PGDialect`` raises ``NotImplementedError``. A driver
+    that does not override it simply does not get the option (no error): use a read-only database account there.
+    """
+    if getattr(dialect, "name", "") != "postgresql":
+        return False
+    from sqlalchemy.dialects.postgresql.base import PGDialect
+
+    override = getattr(type(dialect), "set_readonly", None)
+    return override is not None and override is not PGDialect.set_readonly
 
 
 def _read_sql(url: str, o: ReadOptions, fmt: str) -> _Opened:
-    if bool(o.table) == bool(o.query):
-        raise UsageError("a SQL source needs exactly one of --table or --sql-query")
+    if not o.table:
+        raise UsageError("a SQL source needs --table [schema.]name (a table or a view)")
     try:
         import sqlalchemy as sa
         from sqlalchemy import exc as sa_exc
     except ImportError as exc:
         raise MissingDependencyError("reading from a database requires SQLAlchemy: pip install sqlalchemy") from exc
 
-    if o.table:
-        schema, name = _validate_table(o.table)
-        statement = sa.select(sa.literal_column("*")).select_from(sa.table(name, schema=schema))
-    else:
-        statement = sa.text(_validate_query(o.query))
+    schema, name = _validate_table(o.table)
+    statement = sa.select(sa.literal_column("*")).select_from(sa.table(name, schema=schema))
 
     safe_url = redact_url(url)
+    secrets = _url_secrets(url)
     try:
-        secret = sa.engine.make_url(url).password
+        secrets = sorted({*secrets, *_secret_forms(sa.engine.make_url(url).password)}, key=len, reverse=True)
     except Exception:
-        secret = None
+        pass
+    failure: tuple[type[Exception], str, BaseException] | None = None
+    engine = None
     try:
         engine = sa.create_engine(url)
     except ImportError as exc:  # the DBAPI driver (psycopg2, pymysql, ...) is missing
-        raise MissingDependencyError(
-            f"the database driver for {safe_url} is not installed ({_short(exc, secret)}); "
-            "install it, e.g. pip install psycopg2-binary"
-        ) from exc
-    except (sa_exc.ArgumentError, sa_exc.NoSuchModuleError) as exc:
-        raise UsageError(f"invalid database URL {safe_url}: {_short(exc, secret)}") from exc
+        failure = (MissingDependencyError, f"the database driver for {safe_url} is not installed "
+                   f"({_short(exc, secrets)}); install it, e.g. pip install psycopg2-binary", exc)
+    except (sa_exc.ArgumentError, sa_exc.NoSuchModuleError, ValueError) as exc:
+        failure = (UsageError, f"invalid database URL {safe_url}: {_short(exc, secrets)}", exc)
+    if failure is not None:  # raised outside the handler: no raw driver exception in __cause__ / __context__
+        raise failure[0](failure[1]) from _redacted_cause(failure[2], secrets)
+
+    if getattr(getattr(engine, "dialect", None), "name", "") == "sqlite":
+        missing = _missing_sqlite_file(engine.url)
+        if missing is not None:  # sqlite would silently CREATE an empty file on connect: a read must not
+            engine.dispose()
+            raise SourceReadError(f"SQLite database file not found: {missing}")
+        @sa.event.listens_for(engine, "connect")  # every pooled connection refuses writes
+        def _sqlite_query_only(dbapi_connection, _record):
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("PRAGMA query_only=ON")
+            finally:
+                cursor.close()
+
+    options: dict = {"stream_results": True}
+    if _implements_readonly(getattr(engine, "dialect", None)):  # BEGIN READ ONLY on the session, before any statement
+        options["postgresql_readonly"] = True
 
     connection = None
+
+    def rollback_and_close() -> None:
+        # A read never commits: whatever the transaction holds is rolled back, then everything is released.
+        # Every release step runs whatever happens to the others; the FIRST error is the one reported.
+        steps: list[Callable[[], None]] = [engine.dispose]
+        if connection is not None:
+            try:
+                connection.rollback()
+            except Exception:
+                pass
+            steps.insert(0, connection.close)
+        _run_all(steps)
+
+    query_error: BaseException | None = None
     try:
         connection = engine.connect()
-        result = connection.execution_options(stream_results=True).execute(statement)
+        result = connection.execution_options(**options).execute(statement)
         columns = _dedupe_columns(list(result.keys()))
     except (sa_exc.SQLAlchemyError, OSError) as exc:
-        if connection is not None:
-            connection.close()
-        engine.dispose()
-        raise SourceReadError(f"database query failed for {safe_url}: {_short(exc, secret)}") from exc
+        query_error = exc
+    if query_error is not None:
+        try:
+            rollback_and_close()
+        except Exception:  # cleanup trouble must not mask the error that made the read fail
+            pass
+        raise SourceReadError(
+            f"database query failed for {safe_url}: {_short(query_error, secrets)}"
+        ) from _redacted_cause(query_error, secrets)
 
     def close() -> None:
-        result.close()
-        connection.close()
-        engine.dispose()
+        _run_all([result.close, rollback_and_close])
 
     def gen() -> Iterator[pd.DataFrame]:
+        read_error: BaseException | None = None
         try:
             while True:
                 rows = result.fetchmany(o.chunk_size)
@@ -946,7 +1095,10 @@ def _read_sql(url: str, o: ReadOptions, fmt: str) -> _Opened:
                     return
                 yield pd.DataFrame([tuple(r) for r in rows], columns=columns, dtype=object)
         except sa_exc.SQLAlchemyError as exc:
-            raise SourceReadError(f"database read failed for {safe_url}: {_short(exc, secret)}") from exc
+            read_error = exc
+        raise SourceReadError(
+            f"database read failed for {safe_url}: {_short(read_error, secrets)}"
+        ) from _redacted_cause(read_error, secrets)
 
     return _Opened(columns, gen(), [], closers=(close,))
 
@@ -966,4 +1118,4 @@ register_reader("jsonl", _read_jsonl, [".jsonl", ".ndjson"], "one JSON object pe
 register_reader("geojson", _read_geojson, [".geojson"], "FeatureCollection; centroid -> _lon/_lat; read whole")
 register_reader("shp", _read_shapefile, [".shp", ".zip"], ".shp streams; .zip (shapefile) read whole")
 register_reader("gpkg", _read_gpkg, [".gpkg"], "needs pyogrio + geopandas; --table selects the layer")
-register_reader("sql", _read_sql, [], "SQLAlchemy URL + --table or --sql-query; server-side chunks")
+register_reader("sql", _read_sql, [], "SQLAlchemy URL + --table (table or view); read-only session; server-side chunks")
