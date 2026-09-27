@@ -1,0 +1,171 @@
+{
+  "kind": "hybrid",
+  "version": "reliability-v4-20260925",
+  "fit_date": "2026-09-25T21:31:46",
+  "m": 40,
+  "m_grid": [
+    10,
+    20,
+    40
+  ],
+  "n_train": 529,
+  "ship_rule_passed": true,
+  "source_rows": "strict_eval_paso7_rows.parquet",
+  "clip": [
+    0.02,
+    0.98
+  ],
+  "min_step_support": 15,
+  "isotonic": {
+    "x": [
+      0.7601326704025269,
+      0.8274917006492615,
+      0.8796908855438232,
+      0.9188624024391174,
+      0.95291867852211,
+      0.9609403908252716,
+      0.9736827313899994
+    ],
+    "y": [
+      0.5263157894736842,
+      0.7901234567901234,
+      0.7941176470588235,
+      0.8404907975460123,
+      0.85,
+      0.875,
+      0.9236111111111112
+    ],
+    "n": [
+      19,
+      81,
+      34,
+      163,
+      80,
+      8,
+      144
+    ]
+  },
+  "q_global": 0.7376681614349776,
+  "q": {
+    "exacto": {
+      "n": 397,
+      "hits": 296,
+      "q": 0.7448666509322635
+    },
+    "relajada": {
+      "n": 41,
+      "hits": 27,
+      "q": 0.6976139068814704
+    },
+    "compartida": {
+      "n": 5,
+      "hits": 3,
+      "q": 0.7223716990533134
+    },
+    "parcial": {
+      "n": 3,
+      "hits": 3,
+      "q": 0.7559703827302117
+    }
+  },
+  "cv": {
+    "chosen_m_per_outer_fold": {
+      "fasecolda": 40,
+      "inspecciones": 40,
+      "stickers": 10
+    },
+    "pooled": {
+      "predio": {
+        "hybrid": {
+          "n": 529,
+          "brier": 0.2392899882563335,
+          "logloss": 0.6724773050605498,
+          "ece": 0.06640321767377341,
+          "auc": 0.49604103343465045
+        },
+        "logistic": {
+          "n": 529,
+          "brier": 0.24108038343137658,
+          "logloss": 0.6755563649749469,
+          "ece": 0.07671503894588778,
+          "auc": 0.473419452887538
+        },
+        "cells": {
+          "n": 529,
+          "brier": 0.23817035811659193,
+          "logloss": 0.6695862375656644,
+          "ece": 0.05816159693122,
+          "auc": 0.48133738601823706
+        },
+        "raw": {
+          "n": 529,
+          "brier": 0.3220557849905482,
+          "logloss": 1.0723793028975197,
+          "ece": 0.2973818525519849,
+          "auc": 0.5323632218844985
+        },
+        "isotonic": {
+          "n": 529,
+          "brier": 0.24279080094257835,
+          "logloss": 0.6969996285499501,
+          "ece": 0.09305623063823679,
+          "auc": 0.482241641337386
+        }
+      },
+      "manzana": {
+        "hybrid": {
+          "n": 529,
+          "brier": 0.13166426607128215,
+          "logloss": 0.4324641251492389,
+          "ece": 0.03843786955892407,
+          "auc": 0.5839186341779675
+        },
+        "logistic": {
+          "n": 529,
+          "brier": 0.1366291740386337,
+          "logloss": 0.44649673636908743,
+          "ece": 0.05168242654344065,
+          "auc": 0.4909773623642552
+        },
+        "cells": {
+          "n": 529,
+          "brier": 0.13384708540091464,
+          "logloss": 0.44027292512594973,
+          "ece": 0.035091900684518104,
+          "auc": 0.47521476038683885
+        },
+        "raw": {
+          "n": 529,
+          "brier": 0.13551778877126655,
+          "logloss": 0.46802382660632313,
+          "ece": 0.07620982986767487,
+          "auc": 0.6041655410881194
+        },
+        "isotonic": {
+          "n": 529,
+          "brier": 0.13262214946360873,
+          "logloss": 0.4576064108986696,
+          "ece": 0.03436048609227219,
+          "auc": 0.5824598843805715
+        }
+      }
+    },
+    "logistic_v2_reference": {
+      "predio": {
+        "brier": 0.2409,
+        "ece": 0.084,
+        "auc": 0.491
+      },
+      "manzana": {
+        "brier": 0.1422,
+        "ece": 0.05,
+        "auc": 0.508
+      }
+    }
+  },
+  "notes": [
+    "manzana: isotonic (PAV) fit of correct_manzana on the raw score, served by linear interpolation between step midpoints, clipped to [0.02, 0.98].",
+    "predio = manzana * q_kind, q_kind = shrunk P(predio correct | manzana correct) per row kind.",
+    "Labels are GPS point-in-polygon on a small validation set; neighbouring parcels ~6 m apart make predio labels noisy, so P(predio) is a conservative estimate."
+  ]
+}

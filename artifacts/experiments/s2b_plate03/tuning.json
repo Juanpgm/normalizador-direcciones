@@ -1,0 +1,181 @@
+{
+  "method": {
+    "positives": "held-out cadastral validation documents (4% of addresses, never a training positive); their exact noisy variants replayed",
+    "negatives": "synthetic non-address strings generated from a fixed vocabulary inside scripts/tune_threshold.py",
+    "queries_replayed": 39645,
+    "positives_in_distribution": 10000,
+    "positives_hard": 10000,
+    "hard_intensity": 2.0,
+    "hard_pool_weight": 0.5,
+    "negatives_used": 5000,
+    "junk_rate_assumed": 0.2,
+    "subsample_seed": 1234,
+    "augmentation_seed": 42,
+    "weight_grid_step": 0.05,
+    "weight_combinations": 1540,
+    "weight_objective": "top-1 document accuracy on the positives",
+    "min_geo_weight_constraint": 0.1,
+    "tie_tolerance_se": 1.0,
+    "selection_rule": "most balanced of 20 combinations within 1 SE (0.0021) that keep every component active",
+    "threshold_grid": [
+      0.5,
+      0.95,
+      0.01
+    ],
+    "threshold_objective": "F1 of 'matched => correct document'",
+    "geo_tau_m": 600.0,
+    "evaluation_rows_used": "none (the five Excel workbooks are the test set)"
+  },
+  "chosen": {
+    "weights": {
+      "sim": 0.65,
+      "fuzz": 0.15,
+      "struct": 0.1,
+      "geo": 0.1
+    },
+    "threshold": 0.69,
+    "thresholds": {
+      "full (+ coord head)": 0.69,
+      "rule (no model)": 0.8,
+      "neural only": 0.87,
+      "neural + rerank": 0.78
+    },
+    "variant_weights": {
+      "rule (no model)": {
+        "sim": 0.0,
+        "fuzz": 0.55,
+        "struct": 0.45,
+        "geo": 0.0
+      },
+      "neural only": {
+        "sim": 1.0,
+        "fuzz": 0.0,
+        "struct": 0.0,
+        "geo": 0.0
+      },
+      "neural + rerank": {
+        "sim": 0.7222,
+        "fuzz": 0.1667,
+        "struct": 0.1111,
+        "geo": 0.0
+      },
+      "full (+ coord head)": {
+        "sim": 0.65,
+        "fuzz": 0.15,
+        "struct": 0.1,
+        "geo": 0.1
+      }
+    }
+  },
+  "diagnostics": {
+    "top1_at_chosen_weights": 0.8962,
+    "top1_in_distribution_at_chosen": 0.9342,
+    "top1_hard_at_chosen": 0.8582,
+    "unconstrained_best_weights": {
+      "sim": 0.9,
+      "fuzz": 0.0,
+      "struct": 0.1,
+      "geo": 0.0
+    },
+    "top1_at_unconstrained_best": 0.8987499999999999,
+    "pooled_accuracy_se": 0.002133054587909086,
+    "tie_tolerance": 0.002133054587909086,
+    "selection_cost_top1": -0.002549999999999941,
+    "selection_cost_in_se": 1.195468702233056,
+    "previously_shipped_weights": {
+      "sim": 0.4,
+      "fuzz": 0.26,
+      "struct": 0.22,
+      "geo": 0.12
+    },
+    "top1_at_previously_shipped_weights": 0.8903,
+    "f1_at_chosen_threshold": 0.9460671176548616,
+    "precision_at_chosen_threshold": 0.9018764857619747,
+    "recall_at_chosen_threshold": 0.9948114260209777,
+    "matched_rate_at_chosen_threshold": 0.7908400000000004,
+    "junk_rate_sensitivity": [
+      {
+        "junk_rate": 0.05,
+        "best_threshold": 0.69,
+        "f1": 0.9460671176548614,
+        "precision": 0.9018764857619747,
+        "recall": 0.9948114260209773,
+        "matched_rate": 0.9391225000000002
+      },
+      {
+        "junk_rate": 0.1,
+        "best_threshold": 0.69,
+        "f1": 0.9460671176548612,
+        "precision": 0.9018764857619745,
+        "recall": 0.9948114260209772,
+        "matched_rate": 0.8896949999999991
+      },
+      {
+        "junk_rate": 0.2,
+        "best_threshold": 0.69,
+        "f1": 0.9460671176548616,
+        "precision": 0.9018764857619747,
+        "recall": 0.9948114260209777,
+        "matched_rate": 0.7908400000000004
+      },
+      {
+        "junk_rate": 0.3,
+        "best_threshold": 0.69,
+        "f1": 0.9460671176548613,
+        "precision": 0.9018764857619747,
+        "recall": 0.9948114260209775,
+        "matched_rate": 0.6919850000000003
+      },
+      {
+        "junk_rate": 0.4,
+        "best_threshold": 0.69,
+        "f1": 0.9460671176548612,
+        "precision": 0.9018764857619745,
+        "recall": 0.9948114260209772,
+        "matched_rate": 0.5931299999999996
+      }
+    ],
+    "variants": [
+      {
+        "variant": "rule (no model)",
+        "score": "rapidfuzz + structure, model not used",
+        "threshold": 0.8,
+        "f1": 0.9223828737951133,
+        "precision": 0.8795959811885422,
+        "recall": 0.9695452403393027,
+        "top1_in_distribution": 0.9031,
+        "top1_hard": 0.7945
+      },
+      {
+        "variant": "neural only",
+        "score": "raw cosine similarity",
+        "threshold": 0.87,
+        "f1": 0.9588308977035491,
+        "precision": 0.9585907497077977,
+        "recall": 0.9590711660541265,
+        "top1_in_distribution": 0.9348,
+        "top1_hard": 0.861
+      },
+      {
+        "variant": "neural + rerank",
+        "score": "fused score without the coordinate term",
+        "threshold": 0.78,
+        "f1": 0.9475063511164595,
+        "precision": 0.9116451397108013,
+        "recall": 0.986304420443158,
+        "top1_in_distribution": 0.9355,
+        "top1_hard": 0.8607
+      },
+      {
+        "variant": "full (+ coord head)",
+        "score": "fused score",
+        "threshold": 0.69,
+        "f1": 0.9460671176548616,
+        "precision": 0.9018764857619747,
+        "recall": 0.9948114260209777,
+        "top1_in_distribution": 0.9342,
+        "top1_hard": 0.8582
+      }
+    ]
+  }
+}

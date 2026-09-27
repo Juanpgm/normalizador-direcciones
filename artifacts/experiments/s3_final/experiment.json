@@ -1,0 +1,35 @@
+{
+  "tag": "s3_final",
+  "stage": "3",
+  "inherits_model": true,
+  "model": "production model.pt / catastro_emb.pt (read from artifacts/ via inherits_model)",
+  "selection_criteria": [
+    "maximize gold OK-coverage on train_pairs-gold (2-fold by address_key validated)",
+    "gold predial precision on train_pairs-gold and dev-gold >= production - 0.003",
+    "dev-all manzana precision >= production - 0.005",
+    "predial delivered on every OK row"
+  ],
+  "changes": {
+    "tuning.json chosen.weights": "sim/fuzz/struct/geo 0.7/0.1/0.1/0.1 -> 0.7/0.0/0.2/0.1",
+    "tuning.json chosen.threshold": "0.73 -> 0.70",
+    "tuning.json chosen.decision": {
+      "soft_rules": [
+        "letra_via",
+        "letra_cruce_cardinal",
+        "bis_via",
+        "bis_cruce",
+        "cuadrante_compl"
+      ],
+      "max_soft": 1,
+      "gate_fallback": true
+    },
+    "reliability.json": "refit (logistic, LODO) on dev + train_pairs OK rows with this config; hybrid candidate failed ship rule"
+  },
+  "evidence": {
+    "dev": "OK 1141->1209, manzana 0.8431->0.8391, gold cov 0.9585->0.9723 (281/289), gold predial 0.9819->0.9822",
+    "train_pairs_gold": "OK 5062->5209 (0.9442->0.9717 by this run), predial 0.9459->0.9468",
+    "frozen_test_one_shot": "all OK 1036->1090, manzana 0.694->0.6807 (-0.0133), predial 0.425->0.4147; gold OK 398->405, manzana 0.995->0.9951, predial 0.927->0.9259",
+    "verdict": "all-rows frozen manzana precision dropped >0.01: do NOT promote as is"
+  },
+  "retrained_models": "s2b_ft_b and s2b_combo do not beat production+same decision layer beyond noise"
+}
