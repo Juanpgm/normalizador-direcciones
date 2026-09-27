@@ -1,4 +1,4 @@
-"""Command line: ``python -m cali_address {normalize,inspect,formats}``.
+"""Command line: ``cali-address {setup,normalize,web,inspect,formats}`` (or ``python -m cali_address ...``).
 
 Exit codes: 0 ok, 1 aborted (``--on-error raise`` hit a failing row, or out of memory), 2 usage / mapping /
 config error, 3 I/O error (missing or corrupt input, unreachable database, unwritable output, missing model
@@ -15,8 +15,11 @@ import argparse
 import json
 import logging
 import os
+import socket
 import sys
+import threading
 import time
+import webbrowser
 from typing import Callable
 
 import pandas as pd
@@ -38,7 +41,7 @@ from .io import (
     read_table,
     resolve_config_paths,
 )
-from .io.readers import redact_source
+from .io.readers import _canonical_format, redact_source
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +118,7 @@ def _add_source_options(p: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog=PROG, description="Normalize Cali addresses from any tabular dataset.")
-    sub = ap.add_subparsers(dest="command", required=True, metavar="{normalize,inspect,formats}")
+    sub = ap.add_subparsers(dest="command", required=True, metavar="{setup,normalize,web,inspect,formats}")
 
     n = sub.add_parser("normalize", help="normalize the address column of a dataset",
                        description="Normalize addresses from a file, URL or database into a file.")
@@ -168,6 +171,22 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--json", action="store_true", help="machine readable output")
 
     sub.add_parser("formats", help="list the supported input and output formats")
+
+    st = sub.add_parser("setup", help="make the repository runnable (regenerates catastro_emb.pt) and self-check it",
+                        description="Check the model artifacts, regenerate catastro_emb.pt when it is the only missing "
+                                    "file, then normalize 3 invented addresses to prove everything works.")
+    st.add_argument("--artifacts-dir", help="model artifacts directory (default: artifacts/)")
+    st.add_argument("--force", action="store_true", help="regenerate catastro_emb.pt even if it exists")
+    st.add_argument("--device", help="cuda or cpu (default: cuda if available)")
+    st.add_argument("--batch-size", type=_positive_int, default=4096, help="documents per embedding batch (default 4096)")
+
+    w = sub.add_parser("web", help="start the browser upload page (needs the 'api' extra)",
+                       description="Serve the HTTP API and its upload page on this machine.")
+    w.add_argument("--host", default="127.0.0.1", help="interface to bind (default 127.0.0.1: this machine only)")
+    w.add_argument("--port", type=_ranged_int("port", 1, 65535), default=8000, help="TCP port (default 8000)")
+    w.add_argument("--artifacts-dir", help="model artifacts directory (default: artifacts/)")
+    w.add_argument("--device", help="cuda or cpu (default: the API default, cpu)")
+    w.add_argument("--no-browser", action="store_true", help="do not open the browser")
     return ap
 
 
@@ -196,6 +215,21 @@ def _report(exc: Exception) -> int:
 # ---------------------------------------------------------------------------
 # normalize
 # ---------------------------------------------------------------------------
+#: Output extension for each input format when ``-o`` is omitted (formats with no writer map to a close one).
+_DEFAULT_OUT_EXT = {
+    "csv": ".csv", "tsv": ".tsv", "txt": ".csv", "xlsx": ".xlsx", "xls": ".xlsx", "parquet": ".parquet",
+    "json": ".json", "jsonl": ".jsonl", "geojson": ".geojson", "shp": ".geojson", "gpkg": ".geojson",
+}
+
+
+def default_output_path(source: str, fmt: str) -> str:
+    """``<input stem>_normalizado<ext>`` next to a local input (same format; xls -> xlsx, txt -> csv,
+    shp/zip/gpkg -> geojson). The suffix guarantees the result never equals the input path."""
+    source = os.fspath(source)
+    stem = os.path.splitext(source)[0]
+    return f"{stem}_normalizado{_DEFAULT_OUT_EXT.get(fmt, '.csv')}"
+
+
 def _cli_options(args: argparse.Namespace) -> dict:
     keys = ["input", "output", "output_format", "format", "sheet", "header_row", "delimiter", "encoding", "table",
             "address_col", "address_parts", "parts_sep", "id_col", "municipality_col", "lat_col",
@@ -260,8 +294,11 @@ def _cmd_normalize(args, normalizer_factory, gazetteer_loader) -> int:
         return EXIT_USAGE
     dry_run = opts.get("dry_run")
     if not opts.get("output") and not dry_run:
-        _err("-o/--output is required (or use --dry-run N to preview without writing)")
-        return EXIT_USAGE
+        if "://" in str(source):
+            _err("-o/--output is required for URL and database inputs (or use --dry-run N to preview without writing)")
+            return EXIT_USAGE
+        fmt = _canonical_format(opts["format"]) if opts.get("format") else infer_format(source)
+        opts["output"] = default_output_path(source, fmt)
 
     mapping = ColumnMapping.from_options(
         address_col=opts.get("address_col"), address_parts=opts.get("address_parts"),
@@ -359,6 +396,126 @@ def _cmd_normalize(args, normalizer_factory, gazetteer_loader) -> int:
         _err(f"every row failed ({summary['error']} of {summary['rows']} are ERROR); the model or its inputs are "
              "probably broken. The output and the summary were still written.")
         return EXIT_ALL_ROWS_FAILED
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# setup / web
+# ---------------------------------------------------------------------------
+def _cmd_setup(args, normalizer_factory) -> int:
+    from .paths import ENV_ARTIFACTS_DIR, REQUIRED_ARTIFACTS, check_artifacts, resolve_artifacts_dir
+
+    art = resolve_artifacts_dir(args.artifacts_dir)
+    missing, missing_optional = check_artifacts(art)
+    missing_names = {os.path.basename(p) for p in missing}
+    print(f"artifacts directory: {art}")
+    for name in REQUIRED_ARTIFACTS:
+        print(f"  [{'MISSING' if name in missing_names else 'ok'}] {name}")
+    for path in missing_optional:
+        print(f"  [absent] {os.path.basename(path)} (optional)")
+
+    hard_missing = [n for n in ("model.pt", "catastro_docs.parquet") if n in missing_names]
+    if hard_missing:
+        _err(f"cannot set up: {', '.join(hard_missing)} not found in {art}.")
+        print("  These files are tracked in git: run 'git pull' (or 'git checkout -- artifacts') in the repository.\n"
+              "  Otherwise see docs/model-artifacts.md, or point --artifacts-dir / "
+              f"{ENV_ARTIFACTS_DIR} at a directory that has them.", file=sys.stderr)
+        return EXIT_IO
+
+    from .bootstrap import regenerate_embeddings, self_check
+    from .train import resolve_device
+
+    device = resolve_device(args.device)
+    if args.device and args.device.startswith("cuda") and device == "cpu":
+        print("note: CUDA is not available, using the CPU")
+    if "catastro_emb.pt" in missing_names or args.force:
+        print(f"regenerating catastro_emb.pt (device: {device}). Expected time: seconds on a GPU, "
+              "a few minutes (about 3-10) on a CPU.", flush=True)
+        last = [-1]
+
+        def progress(done: int, total: int) -> None:
+            pct = done * 100 // total
+            if done == total or pct // 10 > last[0] // 10:
+                last[0] = pct
+                print(f"  embedding {done}/{total} ({pct}%)", flush=True)
+
+        try:
+            info = regenerate_embeddings(art, device=device, batch_size=args.batch_size, progress=progress)
+        except OSError as exc:
+            _err(f"cannot write catastro_emb.pt in {art}: {exc}")
+            return EXIT_IO
+        except Exception as exc:
+            _err(f"could not regenerate catastro_emb.pt: {type(exc).__name__}: {exc}")
+            return EXIT_FAILED
+        print(f"wrote {info['path']} ({info['rows']} rows x {info['dim']}) in {info['seconds']:.1f}s")
+    else:
+        print("Already set up: nothing to regenerate.")
+
+    try:
+        result = self_check(normalizer_factory, art, device)
+    except Exception as exc:
+        _err(f"Setup FAILED: the self-check could not normalize the sample addresses ({type(exc).__name__}: {exc}). "
+             "If catastro_emb.pt is stale or corrupt, run 'cali-address setup --force'.")
+        return EXIT_FAILED
+    print(f"Setup OK: 3 sample addresses normalized, {result['rows_per_sec']:.0f} rows/s on {device}. "
+          "Next: cali-address normalize YOUR_FILE.xlsx")
+    return EXIT_OK
+
+
+def _missing_web_extras() -> list[str]:
+    missing = []
+    for names in (("fastapi",), ("uvicorn",), ("python_multipart", "multipart")):  # multipart: pre-0.0.13 name
+        for name in names:
+            try:
+                __import__(name)
+                break
+            except ImportError:
+                continue
+        else:
+            missing.append(names[0])
+    return missing
+
+
+def _schedule_browser(url: str, delay: float = 1.5) -> None:
+    timer = threading.Timer(delay, webbrowser.open, args=(url,))
+    timer.daemon = True
+    timer.start()
+
+
+def _cmd_web(args) -> int:
+    from .paths import require_artifacts, resolve_artifacts_dir
+
+    if _missing_web_extras():
+        _err('the web page needs the "api" extra: pip install -e ".[api]"')
+        return EXIT_IO
+    art = resolve_artifacts_dir(args.artifacts_dir)
+    try:
+        require_artifacts(art)
+    except ArtifactsMissingError as exc:
+        _err(str(exc))
+        print("run 'cali-address setup' first", file=sys.stderr)
+        return EXIT_IO
+    probe = socket.socket(socket.AF_INET6 if ":" in args.host else socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((args.host, args.port))
+    except OSError as exc:
+        _err(f"cannot listen on {args.host}:{args.port} ({exc.strerror or exc}); is another server using it? "
+             "Try --port 8001.")
+        return EXIT_IO
+    finally:
+        probe.close()
+
+    import uvicorn
+
+    os.environ["ARTIFACTS_DIR"] = art  # the API's own variable (api/main.py artifacts_dir())
+    if args.device:
+        os.environ["NORMALIZER_DEVICE"] = args.device
+    shown = "localhost" if args.host in ("0.0.0.0", "::") else args.host
+    url = f"http://{shown}:{args.port}"
+    print(f"Starting the web page at {url}  (the model loads in the background; Ctrl+C to stop)", flush=True)
+    if not args.no_browser:
+        _schedule_browser(url)
+    uvicorn.run("cali_address.api.main:app", host=args.host, port=args.port)
     return EXIT_OK
 
 
@@ -466,6 +623,10 @@ def main(argv: list[str] | None = None, *, normalizer_factory=None, gazetteer_lo
         if args.command == "normalize":
             return _cmd_normalize(args, normalizer_factory or _default_normalizer,
                                   gazetteer_loader or _default_gazetteer)
+        if args.command == "setup":
+            return _cmd_setup(args, normalizer_factory or _default_normalizer)
+        if args.command == "web":
+            return _cmd_web(args)
         if args.command == "inspect":
             return _cmd_inspect(args)
         return _cmd_formats()

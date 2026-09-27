@@ -41,6 +41,16 @@ Held-out synthetic validation recall (`artifacts/train_report.json`, 8 epochs, a
 | `deploy/artifacts/` | A copy of the six serving files |
 | `direcciones_ANN.ipynb`, `.atl/` | Large or local tooling |
 
+## Regenerating `catastro_emb.pt` (one command)
+
+`catastro_emb.pt` depends only on `model.pt` and `catastro_docs.parquet`, both tracked in git, so a fresh clone
+only needs `cali-address setup` (seconds on a GPU, about 3-10 minutes on a CPU). It embeds `direccion.upper()`
+of every document with `train.embed_documents` (the same function training and
+`scripts/finish_training_artifacts.py` use) and the result is identical to the file produced by training.
+Deployment: `deploy/prepare_artifacts.py` and the `Dockerfile` still expect a ready `catastro_emb.pt` in
+`deploy/artifacts/`; running `setup` before `prepare_artifacts.py` (or as a Docker build step that has
+`model.pt` and `catastro_docs.parquet`) would replace copying it by hand. See README_DEPLOY.md.
+
 ## Regenerating the untracked files
 
 Run from the repository root. Steps 1-2 only need network access; the data is public.

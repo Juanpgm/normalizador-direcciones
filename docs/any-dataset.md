@@ -6,7 +6,9 @@ uses, and writes the result to almost any format. Your original columns are kept
 the normalization columns are appended.
 
 ```
-python -m cali_address normalize INPUT -o OUTPUT [options]
+python -m cali_address setup                  # first run: regenerate catastro_emb.pt, then self-check
+python -m cali_address normalize INPUT [-o OUTPUT] [options]
+python -m cali_address web                    # browser upload page (needs the "api" extra)
 python -m cali_address inspect INPUT          # what is in this file? (does not normalize)
 python -m cali_address formats                # supported input / output formats
 ```
@@ -15,6 +17,11 @@ Install with `pip install -e .` (see the README) and use the `cali-address` comm
 or run `python -m cali_address` from a checkout with `PYTHONPATH=src`. The examples
 below use `python -m cali_address`; `cali-address` is an exact alias.
 User errors print one `error:` line with the fix, never a traceback.
+
+**Default output.** Without `-o`, `normalize` writes `<input stem>_normalizado<ext>` next to a local input, in
+the same format (`.xls` -> `.xlsx`, `.txt` -> `.csv`, shapefile / zip / GeoPackage -> `.geojson`). The input is
+never overwritten (the suffix always differs); an existing output file is replaced atomically. URL and SQL
+inputs have no local name and need `-o` (exit 2). `--dry-run N` still writes nothing.
 
 | Exit code | Meaning |
 |-----------|---------|

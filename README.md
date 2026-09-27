@@ -14,7 +14,52 @@ then structural and geographic rules decide. Your original columns are kept; the
 - The input dataset can be anything; column mapping and format handling are the flexible part
   ([docs/any-dataset.md](docs/any-dataset.md)).
 
-## Install
+## Quickstart (3 steps)
+
+Python 3.11+ and a git clone of this repository. Works the same in PowerShell and Git Bash.
+
+```bash
+# 1. Install (CPU-only torch first, so pip does not pick the ~3 GB CUDA build)
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -e ".[api,excel]"
+
+# 2. Make the repository runnable: checks the model files and regenerates catastro_emb.pt (not in git)
+cali-address setup
+
+# 3. Normalize a file: writes direcciones_normalizado.xlsx next to it (same format as the input)
+cali-address normalize direcciones.xlsx
+```
+
+Optional: `cali-address web` serves an upload page at http://127.0.0.1:8000 and opens your browser
+(`--port`, `--no-browser`; needs the `api` extra). If the `cali-address` command is not on your PATH
+(common on Windows), use `python -m cali_address setup`, `python -m cali_address normalize ...` instead.
+
+`setup` takes seconds on an NVIDIA GPU and about 3-10 minutes on a CPU, once. It is safe to re-run
+("Already set up"); `--force` regenerates the embeddings. It finishes by normalizing 3 invented addresses
+and printing `Setup OK`. If the GPU build of torch is installed, `setup` uses it automatically
+(`--device cpu` to override).
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `model artifacts not found` / exit code 3 | Run `cali-address setup`. If it says `model.pt` or `catastro_docs.parquet` is missing, run `git pull` (they are tracked in git) or see [docs/model-artifacts.md](docs/model-artifacts.md). |
+| `several columns could be the address` / `no address column` | Run `cali-address inspect FILE`, then `--address-col NAME` (or `--address-parts A,B,C`). |
+| The header is not on the first row | `--header-row N` (0-based; detected automatically when omitted). |
+| The Excel file is huge or slow | Save it as CSV: CSV streams, Excel is read through openpyxl. |
+| `the web page needs the "api" extra` | `pip install -e ".[api]"`. |
+| `cannot listen on 127.0.0.1:8000` | Another program uses the port: `cali-address web --port 8001`. |
+| The output file already exists | It is replaced atomically (never left half written). The input file is never overwritten. |
+
+Without `-o`, `normalize` writes `<input name>_normalizado<ext>` next to the input: same format for
+csv, tsv, xlsx, parquet, json and geojson; `.xls` becomes `.xlsx`, `.txt` becomes `.csv`, shapefile,
+zip and GeoPackage become `.geojson`. URL and database inputs need `-o`.
+
+Deploying somewhere else (Docker, Railway): see [README_DEPLOY.md](README_DEPLOY.md) (Spanish). The image
+copies a curated `deploy/artifacts/` that already contains `catastro_emb.pt`; `setup` regenerates that
+file (details in [docs/model-artifacts.md](docs/model-artifacts.md)).
+
+## Install (all options)
 
 Python 3.11+. Install CPU-only torch first, so pip does not pick the ~3 GB CUDA build:
 
@@ -42,7 +87,7 @@ The wheel contains code only. The normalizer needs `model.pt`, `catastro_emb.pt`
 (plus optional `tuning.json`, `reliability.json`, `gazetteer.pkl`). Point the CLI at them with
 `--artifacts-dir` or the `CALI_ARTIFACTS_DIR` environment variable. In a git clone, everything except
 `catastro_emb.pt` (161 MB, above the GitHub file-size limit) is tracked in `artifacts/`; regenerate the
-embeddings by following [docs/model-artifacts.md](docs/model-artifacts.md). Without them, `normalize` exits
+embeddings with `cali-address setup` (or by following [docs/model-artifacts.md](docs/model-artifacts.md)). Without them, `normalize` exits
 with code 3 and lists the missing files.
 
 ## 60-second quickstart

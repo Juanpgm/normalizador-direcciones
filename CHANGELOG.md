@@ -10,6 +10,10 @@ First packaged release.
 
 ### Added
 
+- Three-step local use: `cali-address setup` checks the artifacts, regenerates `catastro_emb.pt` from
+  `model.pt` + `catastro_docs.parquet` (atomic write, progress, `--force`, `--device`, `--batch-size`) and
+  self-checks with 3 invented addresses; `cali-address web` starts the existing FastAPI upload page
+  (`--host`, `--port`, `--no-browser`). `train.embed_documents` gained an optional `progress` callback.
 - Any-dataset input and output: `cali-address normalize | inspect | formats` reads CSV, TSV, Excel,
   Parquet, JSON/JSONL, GeoJSON, shapefile, GeoPackage, URLs and SQL databases, maps the address column
   (auto-detected, single column, or several parts), streams in chunks, and writes CSV, Excel, Parquet,
@@ -27,6 +31,9 @@ First packaged release.
 
 ### Changed
 
+- `normalize INPUT` without `-o` now writes `<input stem>_normalizado<ext>` next to a local input (same format;
+  xls -> xlsx, txt -> csv, shp/zip/gpkg -> geojson) instead of failing with exit 2. URL and database inputs still
+  require `-o`.
 - SQL input is table/view based by design (`--table [schema.]name`, session read-only where the driver supports it): there is no free-form SQL option because a text filter cannot be a security boundary for SQL, so create a database view for joins or filters.
 - `--help`, `inspect` and `formats` no longer import torch (table helpers moved to `cali_address.tables`;
   every name is still importable from `cali_address.service`).

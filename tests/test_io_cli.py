@@ -183,9 +183,11 @@ def test_dry_run_without_output_flag(tmp_path, capsys):
     assert "estado" in capsys.readouterr().out
 
 
-def test_output_required_unless_dry_run(tmp_path, capsys):
+def test_output_defaults_next_to_the_input_and_is_required_for_urls(tmp_path, capsys):
     src = write_csv(tmp_path / "in.csv", synth_frame(4))
-    assert run(["normalize", src])[0] == 2
+    assert run(["normalize", src])[0] == 0
+    assert (tmp_path / "in_normalizado.csv").exists()
+    assert run(["normalize", "https://example.org/in.csv"])[0] == 2
     assert "-o" in capsys.readouterr().err
 
 

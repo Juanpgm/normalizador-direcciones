@@ -97,9 +97,12 @@ def set_seeds(seed: int = 42) -> None:
 
 @torch.no_grad()
 def embed_documents(
-    model: AddressEncoder, d_tokens: np.ndarray, device: str = "cuda", batch: int = 4096
+    model: AddressEncoder, d_tokens: np.ndarray, device: str = "cuda", batch: int = 4096, progress=None
 ) -> torch.Tensor:
-    """Embed the whole cadastral index; returns an fp16 CUDA matrix."""
+    """Embed the whole cadastral index; returns an fp16 matrix on ``device``.
+
+    ``progress(done, total)`` is called after every batch when given (used by ``cali-address setup``).
+    """
     model.eval()
     # Token matrices are stored at MAX_LEN; the model may have been trained with a
     # shorter positional embedding, so always truncate to what it can address.
@@ -111,6 +114,8 @@ def embed_documents(
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(device == "cuda")):
             emb = model.embed(ids, role=1)
         out[i : i + batch] = F.normalize(emb.float(), dim=-1).half()
+        if progress is not None:
+            progress(min(i + batch, len(d_tokens)), len(d_tokens))
     return out
 
 
