@@ -82,3 +82,6 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Notebooks are never committed (large, may embed private outputs).
+*.ipynb

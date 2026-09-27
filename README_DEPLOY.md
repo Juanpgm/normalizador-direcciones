@@ -126,15 +126,13 @@ railway up --no-gitignore
 
 ### Camino 2: conectado a GitHub
 
-Railway construye en cada `push`. **Este camino lo ejecuta usted**: este
-repositorio todavia no es un repositorio git y los comandos de git no se han
-ejecutado por usted.
+Railway construye en cada `push`. El repositorio ya es un repositorio git con
+`origin` en GitHub; para un repositorio nuevo, los comandos son:
 
 ```bash
-git init
+git init -b main
 git add .
 git commit -m "feat: servicio HTTP de normalizacion de direcciones"
-git branch -M main
 git remote add origin git@github.com:<usuario>/<repo>.git
 git push -u origin main
 ```
@@ -143,8 +141,10 @@ Luego, en el panel de Railway: **New Project -> Deploy from GitHub repo**,
 elija el repositorio y configure las mismas variables de entorno del Camino 1.
 `railway.toml` ya indica el builder `DOCKERFILE` y el health check.
 
-**Limitacion real de este camino.** `.gitignore` excluye `artifacts/` y
-`deploy/artifacts/`, asi que el repositorio **no lleva los artefactos** y
+**Limitacion real de este camino.** El repositorio lleva el modelo y su
+configuracion (`model.pt`, `tuning.json`, `reliability.json`, `train_report.json`,
+`gazetteer.pkl`, `catastro_docs.parquet`) pero **no** `catastro_emb.pt`
+(161 MB) ni `deploy/artifacts/`, que `.gitignore` excluye. Por eso
 `docker build` fallara con `deploy/artifacts/: not found`. `git add` de esos
 archivos tampoco es una salida: GitHub rechaza `catastro_emb.pt` por superar los
 100 MB por archivo. Para usar GitHub hay que resolver antes como llegan los
